@@ -1,0 +1,15 @@
+# Copier en rclone.conf (jamais committé) et remplacer le token.
+#
+# scope = drive.readonly (et non "drive" comme pour bitwarden) : ce service ne
+# doit jamais pouvoir écrire sur le Drive de l'utilisateur, seulement le lire
+# — cohérent avec la contrainte d'immutabilité de la source (voir CLAUDE.md,
+# "Immutabilité de la source").
+#
+# Ce fichier ne peut pas être généré automatiquement : l'obtention du token
+# nécessite une autorisation OAuth interactive dans un vrai navigateur. Utiliser
+# scripts/authorize-gdrive.sh, qui l'automatise (sauf le clic d'autorisation
+# lui-même). Voir README.md, section "Synchronisation Google Drive".
+[gdrive]
+type = drive
+scope = drive.readonly
+token = {"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}

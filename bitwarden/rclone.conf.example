@@ -1,0 +1,17 @@
+# Copier en rclone.conf (jamais committé) et remplacer le token.
+#
+# Ce fichier ne peut pas être généré automatiquement : l'obtention du token
+# nécessite une autorisation OAuth interactive dans un vrai navigateur (accès
+# Google Drive). Sur une machine qui a un navigateur (pas forcément celle qui
+# fait tourner bitwarden) :
+#
+#   docker run --rm -it rclone/rclone authorize "drive"
+#
+# (ou `rclone authorize "drive"` si rclone est déjà installé localement).
+# Suivre le lien affiché, se connecter/autoriser l'accès à son propre Google
+# Drive, puis copier le blob JSON affiché à la fin dans le champ `token`
+# ci-dessous.
+[gdrive]
+type = drive
+scope = drive
+token = {"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}

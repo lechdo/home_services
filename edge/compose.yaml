@@ -1,0 +1,143 @@
+services:
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    # network_mode: host (découvert nécessaire à l'usage, pas anticipé à la
+    # conception) : chaque service backend publie son port HTTP sur
+    # 127.0.0.1:PORT (contrat d'intégration, _plan/architecture.md). Un socket
+    # lié explicitement à 127.0.0.1 n'accepte QUE les connexions arrivant par
+    # la loopback — pas celles arrivant via la passerelle d'un réseau bridge
+    # Docker (ce que donnait host.docker.internal:host-gateway, essayé en
+    # premier : 502 Bad Gateway systématique). En network_mode: host, ce
+    # conteneur partage directement l'espace réseau de l'hôte : 127.0.0.1 y
+    # désigne réellement la loopback de l'hôte, exactement comme le ferait un
+    # client externe qui se connecterait localement. Pas de "ports:" avec ce
+    # mode : nginx écoute le 443 directement sur l'hôte via sa propre config.
+    network_mode: host
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certs:/etc/nginx/certs:ro
+    # Reload périodique : nginx ne relit jamais un certificat déjà chargé sans
+    # signal explicite. sidecar-acme n'a aucun moyen d'atteindre ce conteneur
+    # (pas de docker.sock partagé, volontairement, pour rester isolé) : on
+    # recharge donc nginx nous-mêmes toutes les 6h pour reprendre tout
+    # certificat renouvelé entre-temps. Un reload nginx est sans coupure.
+    # (Pattern identique à bitwarden/compose.yaml — même raisonnement.)
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        (
+          while true; do
+            sleep 21600
+            nginx -s reload 2>/dev/null || true
+          done
+        ) &
+        exec nginx -g 'daemon off;'
+
+  # sidecar-acme : obtient/renouvelle les certificats Let's Encrypt via
+  # challenge DNS-01 (fournisseur DuckDNS), un par sous-domaine. `command:
+  # daemon` exécute le cron interne d'acme.sh (vérification quotidienne,
+  # renouvellement si <30j de validité restante, puis ré-exécution automatique
+  # de l'action --install-cert enregistrée lors de l'émission initiale).
+  # L'émission initiale de chaque sous-domaine se fait manuellement une fois,
+  # voir README.md.
+  sidecar-acme:
+    image: neilpang/acme.sh:latest
+    profiles: ["duckdns"]
+    restart: unless-stopped
+    environment:
+      DuckDNS_Token: "${DUCKDNS_TOKEN}"
+    volumes:
+      - acme_state:/acme.sh
+      - certs:/certs
+    command: daemon
+
+  # sidecar-ddns : maintient à jour l'enregistrement AAAA DuckDNS de TOUS les
+  # sous-domaines enregistrés (DUCKDNS_SUBDOMAINS, séparés par des virgules)
+  # avec l'IPv6 publique courante, en une seule requête — tous ces
+  # sous-domaines pointent vers la même IP (même réseau domestique), pas besoin
+  # d'un sidecar par service (cf. _plan/architecture.md).
+  #
+  # Repris de bitwarden/compose.yaml, où deux points ont été découverts en
+  # testant réellement en conditions réelles :
+  # - www.duckdns.org n'a pas d'enregistrement AAAA (API joignable qu'en
+  #   IPv4) : impossible de compter sur l'auto-détection DuckDNS habituelle.
+  #   On détermine nous-mêmes l'IPv6 publique via un service dual-stack
+  #   (api6.ipify.org), puis on l'envoie explicitement à DuckDNS en IPv4.
+  # - network_mode: host (plutôt que le réseau par défaut du projet) : le
+  #   réseau bridge Docker ne fournit pas de connectivité IPv6 sortante aux
+  #   conteneurs. Ce conteneur n'a besoin de parler qu'à des hôtes publics
+  #   (api6.ipify.org, www.duckdns.org) et doit voir l'IPv6 réelle de la
+  #   machine hôte.
+  sidecar-ddns:
+    image: alpine:3.20
+    profiles: ["duckdns"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DUCKDNS_SUBDOMAINS: "${DUCKDNS_SUBDOMAINS}"
+      DUCKDNS_TOKEN: "${DUCKDNS_TOKEN}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache curl >/dev/null
+        if [ -z "$${DUCKDNS_SUBDOMAINS}" ]; then
+          echo "DUCKDNS_SUBDOMAINS est vide, rien à mettre à jour." >&2
+          exit 1
+        fi
+        echo "sidecar-ddns démarré pour: $${DUCKDNS_SUBDOMAINS}"
+        while true; do
+          IPV6=$$(curl -6 -fsS -m 10 https://api6.ipify.org || echo "")
+          if [ -z "$$IPV6" ]; then
+            echo "$$(date -u +%FT%TZ) impossible de déterminer l'IPv6 publique (pas de connectivité IPv6 sortante ?)" >&2
+          else
+            RESPONSE=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS}&token=$${DUCKDNS_TOKEN}&ipv6=$${IPV6}" || echo "ERROR")
+            # Le format exact de la réponse pour plusieurs domaines en une
+            # requête n'est pas documenté de façon certaine (validé "OK" pour
+            # un seul domaine sur bitwarden) : on se contente donc de détecter
+            # l'absence du marqueur d'échec "KO" plutôt qu'une égalité stricte.
+            # À revalider empiriquement en Phase 2 (voir _plan/plan.md).
+            case "$$RESPONSE" in
+              *KO*|ERROR)
+                echo "$$(date -u +%FT%TZ) échec mise à jour DuckDNS ($${DUCKDNS_SUBDOMAINS}): $$RESPONSE" >&2
+                ;;
+              *)
+                echo "$$(date -u +%FT%TZ) DuckDNS AAAA mis à jour ($${DUCKDNS_SUBDOMAINS}): $$IPV6 (réponse: $$RESPONSE)"
+                ;;
+            esac
+          fi
+          sleep 300
+        done
+
+  # Conteneur ponctuel (Phase 0 uniquement) : génère un certificat auto-signé
+  # local pour valider que le reverse-proxy fonctionne avant tout sous-domaine
+  # DuckDNS réel. Ne tourne jamais en continu — s'exécute une fois via :
+  #   docker compose run --rm cert-init
+  cert-init:
+    image: alpine:3.20
+    profiles: ["init"]
+    volumes:
+      - certs:/certs
+    environment:
+      LOCAL_TEST_HOSTNAME: "${LOCAL_TEST_HOSTNAME:-edge.home.test}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache openssl >/dev/null
+        if [ -f /certs/_test/fullchain.pem ] && [ -f /certs/_test/privkey.pem ]; then
+          echo "Certificat de test déjà présent dans le volume, rien à faire."
+          exit 0
+        fi
+        mkdir -p /certs/_test
+        openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+          -keyout /certs/_test/privkey.pem -out /certs/_test/fullchain.pem \
+          -subj "/CN=$${LOCAL_TEST_HOSTNAME}" \
+          -addext "subjectAltName=DNS:$${LOCAL_TEST_HOSTNAME}"
+        chmod 644 /certs/_test/fullchain.pem /certs/_test/privkey.pem
+        echo "Certificat auto-signé généré pour $${LOCAL_TEST_HOSTNAME}"
+
+volumes:
+  certs:
+  acme_state:

@@ -1,0 +1,52 @@
+{
+  "document_types": [
+    {"name": "Facture", "matching_algorithm": 6},
+    {"name": "Contrat", "matching_algorithm": 6},
+    {"name": "Relevé bancaire", "matching_algorithm": 6},
+    {"name": "Courrier administratif", "matching_algorithm": 6},
+    {"name": "Bulletin de salaire", "matching_algorithm": 6},
+    {"name": "Impôt", "matching_algorithm": 6},
+    {"name": "Assurance", "matching_algorithm": 6},
+    {"name": "Lucas", "matching_algorithm": 6},
+    {"name": "Virginie", "matching_algorithm": 6},
+    {"name": "Julien", "matching_algorithm": 6}
+  ],
+  "tags": [
+    {"name": "EDF", "matching_algorithm": 6},
+    {"name": "maison", "matching_algorithm": 6},
+    {"name": "à vérifier", "matching_algorithm": 6},
+    {"name": "important", "matching_algorithm": 6},
+    {"name": "comptabilité", "matching_algorithm": 6},
+    {"name": "mdph", "matching_algorithm": 6}
+  ],
+  "custom_fields": [
+    {"name": "fournisseur", "data_type": "string"},
+    {"name": "montant", "data_type": "monetary"},
+    {"name": "date_document", "data_type": "date"},
+    {"name": "date_echeance", "data_type": "date"},
+    {"name": "numero_piece", "data_type": "string"}
+  ],
+  "workflows": [
+    {
+      "name": "RAD/LAD - notification document",
+      "order": 1,
+      "enabled": true,
+      "triggers": [
+        {"type": 2, "sources": [1, 2, 3, 4]},
+        {"type": 3, "sources": [1, 2, 3, 4]}
+      ],
+      "actions": [
+        {
+          "type": 4,
+          "webhook": {
+            "url": "http://rad-lad-service:8000/webhook/paperless",
+            "use_params": true,
+            "as_json": true,
+            "params": {"document_id": "{{ doc_id }}"},
+            "include_document": false
+          }
+        }
+      ]
+    }
+  ]
+}

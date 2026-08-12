@@ -1,0 +1,39 @@
+# Gabarit à copier pour enregistrer un nouveau service backend.
+#
+#   cp _example-service.conf.template <nom-service>.conf
+#   puis remplacer SUBDOMAIN et UPSTREAM_PORT ci-dessous.
+#
+# Le suffixe ".template" n'est volontairement PAS ".conf" : nginx charge tout
+# /etc/nginx/conf.d/*.conf (voir nginx.conf par défaut de l'image officielle),
+# ce gabarit reste donc inerte tant qu'il n'est pas copié/renommé.
+#
+# Rappel du contrat d'intégration (edge/_plan/architecture.md) : le service
+# backend publie un port HTTP sur l'hôte, un point. Il n'a besoin de rien
+# connaître d'edge ; c'est ce fichier, propre à edge, qui l'enregistre.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name SUBDOMAIN.duckdns.org;
+
+    ssl_certificate     /etc/nginx/certs/SUBDOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/SUBDOMAIN/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:UPSTREAM_PORT;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Si le service a besoin de websockets (ex. vaultwarden /notifications/hub),
+    # ajouter un location dédié avant le "location /" ci-dessus :
+    #
+    # location /chemin-websocket {
+    #     proxy_pass http://127.0.0.1:UPSTREAM_PORT;
+    #     proxy_http_version 1.1;
+    #     proxy_set_header Upgrade $http_upgrade;
+    #     proxy_set_header Connection "upgrade";
+    # }
+}

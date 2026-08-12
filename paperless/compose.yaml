@@ -1,0 +1,120 @@
+services:
+  # broker : file de tâches (OCR, indexation, matching Auto) — nécessaire
+  # même en usage mono-utilisateur, Paperless-ngx ne fonctionne pas sans.
+  # Non anticipé dans _plan/architecture.md (conception centrée sur
+  # PostgreSQL) : découvert à l'implémentation, cf. _plan/plan.md phase 0.
+  broker:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    networks:
+      - internal
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  # webserver : ne termine jamais le TLS et ne gère aucun DNS — exposition
+  # Internet éventuelle déléguée au service `edge` (contrat d'intégration,
+  # cf. ../edge/_plan/architecture.md et CLAUDE.md, "Exposition Internet").
+  paperless:
+    # ghcr.io/paperless-ngx/paperless-ngx (registre "canonique" de la doc
+    # officielle) refuse le pull dans cet environnement de test ("denied") ;
+    # docker.io/paperlessngx/paperless-ngx est le même projet, publié en
+    # mirroir sur Docker Hub — utilisé ici pour cette raison pratique.
+    image: paperlessngx/paperless-ngx:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBNAME: paperless
+      PAPERLESS_DBUSER: paperless
+      PAPERLESS_DBPASS: "${POSTGRES_PASSWORD}"
+      PAPERLESS_SECRET_KEY: "${PAPERLESS_SECRET_KEY}"
+      PAPERLESS_TIME_ZONE: "${PAPERLESS_TIME_ZONE:-UTC}"
+      # Règle ALLOWED_HOSTS + CORS_ALLOWED_HOSTS + CSRF_TRUSTED_ORIGINS en une
+      # variable (nécessaire derrière un reverse-proxy sur un nom de domaine
+      # personnalisé, ici edge).
+      PAPERLESS_URL: "https://${PUBLIC_HOSTNAME:-paperless.home.test}"
+      PAPERLESS_ADMIN_USER: "${PAPERLESS_ADMIN_USER:-admin}"
+      PAPERLESS_ADMIN_PASSWORD: "${PAPERLESS_ADMIN_PASSWORD}"
+      PAPERLESS_ADMIN_MAIL: "${PAPERLESS_ADMIN_MAIL:-admin@example.com}"
+    volumes:
+      - data:/usr/src/paperless/data
+      - media:/usr/src/paperless/media
+      - ./export:/usr/src/paperless/export
+      - ./consume:/usr/src/paperless/consume
+    ports:
+      - "127.0.0.1:8082:8000"
+    networks:
+      - internal
+
+  # rad-lad-service : squelette du service d'orchestration/intelligence
+  # (Phase 3, cf. _plan/plan.md). Reçoit le webhook du workflow Paperless
+  # "RAD/LAD - notification document" (déclaré dans provisioning/seed.json) à
+  # l'ajout/modification d'un document, et relit ce document (dont son texte
+  # OCR) via l'API Paperless — ne classe/n'extrait encore rien (Phase 4+).
+  # Jamais exposé sur l'hôte : seul Paperless (réseau interne) l'appelle.
+  rad-lad-service:
+    build: ./rad-lad
+    restart: unless-stopped
+    depends_on:
+      - paperless
+    environment:
+      PAPERLESS_BASE_URL: http://paperless:8000
+      PAPERLESS_ADMIN_USER: "${PAPERLESS_ADMIN_USER:-admin}"
+      PAPERLESS_ADMIN_PASSWORD: "${PAPERLESS_ADMIN_PASSWORD}"
+    networks:
+      - internal
+
+  # sidecar-gdrive-sync : synchronisation unidirectionnelle Google Drive ->
+  # consume (Phase 1, cf. _plan/plan.md et _plan/architecture.md). `rclone
+  # copy` uniquement (jamais `sync`) : ne supprime jamais rien côté Drive
+  # (immutabilité de la source) ni ne réagit à la disparition d'un fichier
+  # déjà consommé par Paperless (Paperless retire les fichiers du dossier
+  # consume une fois ingérés — un `sync` les recopierait indéfiniment).
+  # Un fichier déjà ingéré et recopié par erreur (ex. relance manuelle) est
+  # rejeté par la détection de doublon par hash déjà native à Paperless-ngx,
+  # pas de tracking custom nécessaire à ce stade (cf. README.md).
+  sidecar-gdrive-sync:
+    image: alpine:3.20
+    profiles: ["gdrive-sync"]
+    restart: unless-stopped
+    environment:
+      GDRIVE_REMOTE_PATH: "${GDRIVE_REMOTE_PATH}"
+      RCLONE_CONFIG: /rclone.conf
+    volumes:
+      - ./rclone.conf:/rclone.conf:ro
+      - ./consume:/consume
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache rclone >/dev/null
+        while true; do
+          echo "$$(date -u +%FT%TZ) début de la synchronisation depuis $$GDRIVE_REMOTE_PATH"
+          rclone copy "$$GDRIVE_REMOTE_PATH" /consume --min-age 1m
+          echo "$$(date -u +%FT%TZ) synchronisation terminée"
+          sleep 300
+        done
+
+networks:
+  internal:
+
+volumes:
+  data:
+  media:
+  pgdata:
+  redisdata:

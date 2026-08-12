@@ -1,0 +1,84 @@
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    restart: unless-stopped
+    environment:
+      # DOMAIN reste en https:// : c'est l'URL externe vue par les clients
+      # (navigateur, apps), pas le protocole du saut interne reverse-proxy ->
+      # vaultwarden. Le TLS est désormais terminé par le service edge, pas ici
+      # (cf. bitwarden/_plan/plan-migration-edge.md).
+      DOMAIN: "https://${LOCAL_HOSTNAME:-vault.home.test}"
+      SIGNUPS_ALLOWED: "${SIGNUPS_ALLOWED:-true}"
+      # WEBSOCKET_ENABLED est déprécié depuis Vaultwarden 1.31.0 (port 3012
+      # supprimé, websocket intégré au port HTTP principal, activé par défaut
+      # depuis 1.29.0) — ENABLE_WEBSOCKET est la variable actuelle.
+      ENABLE_WEBSOCKET: "true"
+      ADMIN_TOKEN: "${ADMIN_TOKEN}"
+    volumes:
+      - vaultwarden_data:/data
+    networks:
+      - internal
+
+  # reverse-proxy ne termine plus le TLS : c'est le rôle du service `edge`
+  # (point d'entrée Internet unique du dossier racine, cf.
+  # ../edge/_plan/architecture.md). Ce conteneur reste utile pour ses règles
+  # spécifiques à vaultwarden (websocket, taille max des pièces jointes,
+  # headers) — il écoute en clair sur un port publié uniquement sur la
+  # loopback de l'hôte, joignable par edge comme le ferait un client externe.
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - vaultwarden
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    ports:
+      - "127.0.0.1:8081:80"
+    networks:
+      - internal
+
+  # sidecar-backup : sauvegarde chiffrée/dédupliquée quotidienne du volume
+  # vaultwarden_data vers Google Drive (restic + rclone), cf.
+  # _plan/plan-sauvegarde.md. Rôle unique et isolé, comme les autres sidecars
+  # historiques de ce service (BF-8) — ne dépend d'aucun autre conteneur.
+  # Snapshot cohérent de la base sqlite via l'API de backup SQLite plutôt
+  # qu'une copie brute, pour éviter une sauvegarde corrompue en cas d'écriture
+  # concurrente.
+  sidecar-backup:
+    image: alpine:3.20
+    profiles: ["backup"]
+    restart: unless-stopped
+    environment:
+      RESTIC_REPOSITORY: "${RESTIC_REPOSITORY}"
+      RESTIC_PASSWORD: "${RESTIC_PASSWORD}"
+      RCLONE_CONFIG: /rclone.conf
+    volumes:
+      - vaultwarden_data:/data:ro
+      - ./rclone.conf:/rclone.conf:ro
+      - backup_staging:/staging
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache restic rclone sqlite >/dev/null
+        mkdir -p /staging
+        while true; do
+          echo "$$(date -u +%FT%TZ) début du backup"
+          sqlite3 /data/db.sqlite3 ".backup /staging/db.sqlite3"
+          rm -rf /staging/attachments /staging/sends
+          cp -r /data/attachments /staging/attachments 2>/dev/null || mkdir -p /staging/attachments
+          cp -r /data/sends /staging/sends 2>/dev/null || mkdir -p /staging/sends
+          cp /data/config.json /staging/config.json 2>/dev/null || true
+          cp /data/rsa_key*.pem /staging/ 2>/dev/null || true
+          restic backup /staging --tag vaultwarden --host bitwarden
+          restic forget --prune --keep-daily 14 --keep-weekly 8 --keep-monthly 6
+          echo "$$(date -u +%FT%TZ) backup terminé"
+          sleep 86400
+        done
+
+networks:
+  internal:
+
+volumes:
+  vaultwarden_data:
+  backup_staging:
