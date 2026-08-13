@@ -30,6 +30,14 @@ Validée réellement le 2026-08-12 : `cert-init` génère le certificat, `revers
 
 </details>
 
+## Déploiement en production (Raspberry Pi)
+
+```bash
+./scripts/deploy.sh
+```
+
+rsync ce dossier vers la machine cible (`REMOTE_USER`/`REMOTE_HOST`/`REMOTE_PATH`, par défaut `julien@raspi-home.local:~/home_services/edge` — voir `../deploiement-raspberry.md`), applique les changements Docker Compose, recharge nginx, puis vérifie chaque sous-domaine de `DUCKDNS_SUBDOMAINS` avec un `curl` local sur la machine cible. Idempotent, à relancer après toute modification locale (`compose.yaml`, `nginx/conf.d/*.conf`, `.env`).
+
 ## Prérequis
 
 - Docker + Docker Compose (`docker compose version`).

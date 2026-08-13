@@ -63,7 +63,23 @@ services:
   # - www.duckdns.org n'a pas d'enregistrement AAAA (API joignable qu'en
   #   IPv4) : impossible de compter sur l'auto-détection DuckDNS habituelle.
   #   On détermine nous-mêmes l'IPv6 publique via un service dual-stack
-  #   (api6.ipify.org), puis on l'envoie explicitement à DuckDNS en IPv4.
+  #   (api6.ipify.org).
+  # - ip=192.0.2.1 explicite dans l'appel update : sans ce paramètre, DuckDNS
+  #   auto-détecte l'IPv4 de la requête entrante (forcément en IPv4 vu le
+  #   point précédent) et crée un A record avec l'IPv4 CGNAT de la box —
+  #   adresse qui a l'air valide mais qui timeout silencieusement (aucun
+  #   port-forward IPv4 n'existe, seul le pare-feu IPv6 est ouvert, cf.
+  #   deploiement-raspberry.md). Un client dont la pile réseau essaie l'IPv4
+  #   avant l'IPv6 (constaté sur Windows, pas sur Android/Linux) reste alors
+  #   bloqué ~20s sur ce A record mort avant de basculer sur l'IPv6
+  #   fonctionnelle.
+  #   192.0.2.1 (TEST-NET-1, RFC 5737, plage documentaire jamais routée sur
+  #   Internet) fait échouer la tentative IPv4 rapidement (unreachable
+  #   renvoyé en amont) sans passer par une IP privée/loopback : une IP
+  #   privée (0.0.0.0, 127.0.0.1...) déclenche la protection anti-DNS-
+  #   rebinding de certains navigateurs, qui bloquent alors toute la
+  #   connexion (constaté : "site inaccessible" avec 0.0.0.0, pire que le
+  #   problème initial).
   # - network_mode: host (plutôt que le réseau par défaut du projet) : le
   #   réseau bridge Docker ne fournit pas de connectivité IPv6 sortante aux
   #   conteneurs. Ce conteneur n'a besoin de parler qu'à des hôtes publics
@@ -92,7 +108,7 @@ services:
           if [ -z "$$IPV6" ]; then
             echo "$$(date -u +%FT%TZ) impossible de déterminer l'IPv6 publique (pas de connectivité IPv6 sortante ?)" >&2
           else
-            RESPONSE=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS}&token=$${DUCKDNS_TOKEN}&ipv6=$${IPV6}" || echo "ERROR")
+            RESPONSE=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS}&token=$${DUCKDNS_TOKEN}&ip=192.0.2.1&ipv6=$${IPV6}" || echo "ERROR")
             # Le format exact de la réponse pour plusieurs domaines en une
             # requête n'est pas documenté de façon certaine (validé "OK" pour
             # un seul domaine sur bitwarden) : on se contente donc de détecter
