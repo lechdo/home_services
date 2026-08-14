@@ -16,6 +16,7 @@ services:
     network_mode: host
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/error-pages:/etc/nginx/error-pages:ro
       - certs:/etc/nginx/certs:ro
     # Reload périodique : nginx ne relit jamais un certificat déjà chargé sans
     # signal explicite. sidecar-acme n'a aucun moyen d'atteindre ce conteneur
@@ -126,10 +127,21 @@ services:
           sleep 300
         done
 
-  # Conteneur ponctuel (Phase 0 uniquement) : génère un certificat auto-signé
-  # local pour valider que le reverse-proxy fonctionne avant tout sous-domaine
-  # DuckDNS réel. Ne tourne jamais en continu — s'exécute une fois via :
+  # Conteneur ponctuel : génère les certificats auto-signés nécessaires aux
+  # blocs nginx qui n'ont pas (encore) de certificat Let's Encrypt — le bloc
+  # de test par défaut (_test) depuis la Phase 0, et tout service en mode
+  # "local uniquement" qui a besoin malgré tout d'un contexte HTTPS (voir
+  # correction ci-dessous). Ne tourne jamais en continu — s'exécute via :
   #   docker compose run --rm cert-init
+  #
+  # Correction découverte à l'usage (2026-08-13, actual-budget) : un service
+  # "local uniquement" servi en HTTP simple (sans certificat) ne suffit pas
+  # toujours — un navigateur ne considère "contexte sécurisé" que HTTPS ou
+  # localhost/127.0.0.1, et certaines apps web (Actual, via SharedArrayBuffer)
+  # exigent ce contexte sécurisé pour fonctionner, même sans avoir besoin
+  # d'un vrai certificat de confiance publique. D'où un certificat auto-signé
+  # ici aussi pour budget.home.test, jamais un certificat Let's Encrypt (pas
+  # de sous-domaine DuckDNS pour ce service, cf. _plan/architecture.md).
   cert-init:
     image: alpine:3.20
     profiles: ["init"]
@@ -142,17 +154,23 @@ services:
       - |
         set -e
         apk add --no-cache openssl >/dev/null
-        if [ -f /certs/_test/fullchain.pem ] && [ -f /certs/_test/privkey.pem ]; then
-          echo "Certificat de test déjà présent dans le volume, rien à faire."
-          exit 0
-        fi
-        mkdir -p /certs/_test
-        openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
-          -keyout /certs/_test/privkey.pem -out /certs/_test/fullchain.pem \
-          -subj "/CN=$${LOCAL_TEST_HOSTNAME}" \
-          -addext "subjectAltName=DNS:$${LOCAL_TEST_HOSTNAME}"
-        chmod 644 /certs/_test/fullchain.pem /certs/_test/privkey.pem
-        echo "Certificat auto-signé généré pour $${LOCAL_TEST_HOSTNAME}"
+        generate() {
+          hostname="$$1"
+          dir="$$2"
+          if [ -f "/certs/$$dir/fullchain.pem" ] && [ -f "/certs/$$dir/privkey.pem" ]; then
+            echo "Certificat pour $$hostname déjà présent (/certs/$$dir), rien à faire."
+            return 0
+          fi
+          mkdir -p "/certs/$$dir"
+          openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+            -keyout "/certs/$$dir/privkey.pem" -out "/certs/$$dir/fullchain.pem" \
+            -subj "/CN=$$hostname" \
+            -addext "subjectAltName=DNS:$$hostname"
+          chmod 644 "/certs/$$dir/fullchain.pem" "/certs/$$dir/privkey.pem"
+          echo "Certificat auto-signé généré pour $$hostname (/certs/$$dir)"
+        }
+        generate "$${LOCAL_TEST_HOSTNAME}" "_test"
+        generate "budget.home.test" "budget"
 
 volumes:
   certs:
