@@ -92,6 +92,18 @@ Monter en sophistication uniquement quand le niveau précédent échoue trop sou
 - Cette phase est indépendante des phases 0-6 : elle ne conditionne pas le fonctionnement local de Paperless, seulement son accès distant — cohérent avec le fait qu'elle a été implémentée avant que les phases 1-6 (config métier, RAD/LAD) ne soient commencées.
 - **Pas encore fait** : passage en production (toujours staging), test sur la machine cible finale.
 
+## Phase 9 — Migration vers un second serveur dédié — **planifiée, pas encore faite**
+
+- **Contexte** : `paperless` (et son sidecar rclone, futur RAD/LAD) va quitter la machine qui héberge `edge` pour un second serveur physique, sur le **même réseau local domestique**, avec une IP LAN déjà réservée (DHCP). Ce serveur ne sera **pas allumé en permanence** — accepté explicitement comme un choix, pas un incident à corriger.
+- **Ce qui ne change pas** : toujours conteneurisé via `compose.yaml`, toujours aucune connaissance d'`edge` (le service ignore qui le route et comment — cf. `CLAUDE.md`), toujours aucun token DuckDNS/certificat/sidecar DDNS-ACME propre. `PAPERLESS_URL` reste `https://paperless-jvince.duckdns.org` (donnée applicative pour `ALLOWED_HOSTS`/CORS/CSRF, pas une adresse réseau) — inchangé par ce déménagement.
+- **Ce qui change** :
+  1. **Binding du port publié** (`compose.yaml`, actuellement `127.0.0.1:8082:8000`) : ne peut plus être borné à la loopback, puisque la requête vient désormais du réseau local (edge, sur une autre machine) et non de l'hôte lui-même. À remplacer par l'IP LAN de ce second serveur : `<IP_LAN_PAPERLESS>:8082:8000` — jamais `0.0.0.0` (pas d'exposition sur toutes les interfaces de la machine).
+  2. **Pare-feu côté second serveur** : autoriser le port `8082/tcp` uniquement depuis l'IP LAN de la machine qui héberge `edge` — jamais tout le LAN, jamais Internet. Le trafic edge↔paperless reste du HTTP non chiffré (cf. contrat `edge/_plan/architecture.md`) ; ce n'est défendable que restreint à une source précise sur un réseau de confiance.
+  3. **Migration des volumes** (`pgdata`, `media`, `redisdata`) et de `.env`/`rclone.conf` vers le second serveur : une copie manuelle (export/`rsync` des volumes Docker) suffit, pas de script de migration dédié à écrire — ces données sont de toute façon reconstructibles depuis Google Drive si besoin (cf. `plan-sauvegarde.md`), donc pas de procédure filet de sécurité particulière au-delà de la copie elle-même.
+  4. `sidecar-gdrive-sync` (rclone) suit paperless sur le second serveur — aucune dépendance à la machine d'`edge`, aucun changement de logique de synchronisation.
+- **Disponibilité intermittente — porté entièrement côté edge, pas ici** : la dégradation propre du service quand le second serveur est éteint (page d'indisponibilité au lieu d'une erreur brute, timeouts courts) est une responsabilité d'`edge` (voir `edge/_plan/plan.md` phase 7), pas de paperless — cohérent avec le principe d'autonomie : paperless n'a rien à coder ni à configurer pour ce cas, il ne sait même pas qu'`edge` existe.
+- **Pas encore fait** : bascule physique effective, mise à jour de l'IP dans `edge/nginx/conf.d/paperless.conf`, test réel serveur éteint/rallumé.
+
 ## Documents associés
 
 - `architecture.md` — schémas d'architecture et flux détaillés.
