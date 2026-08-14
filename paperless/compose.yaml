@@ -80,14 +80,22 @@ services:
       - internal
 
   # sidecar-gdrive-sync : synchronisation unidirectionnelle Google Drive ->
-  # consume (Phase 1, cf. _plan/plan.md et _plan/architecture.md). `rclone
-  # copy` uniquement (jamais `sync`) : ne supprime jamais rien côté Drive
-  # (immutabilité de la source) ni ne réagit à la disparition d'un fichier
-  # déjà consommé par Paperless (Paperless retire les fichiers du dossier
-  # consume une fois ingérés — un `sync` les recopierait indéfiniment).
-  # Un fichier déjà ingéré et recopié par erreur (ex. relance manuelle) est
-  # rejeté par la détection de doublon par hash déjà native à Paperless-ngx,
-  # pas de tracking custom nécessaire à ce stade (cf. README.md).
+  # consume (Phase 1, cf. _plan/plan.md et _plan/architecture.md). Ne supprime
+  # jamais rien côté Drive (immutabilité de la source).
+  # Bug découvert à l'usage (2026-08-14, voir _plan/plan.md phase 1) : un
+  # simple `rclone copy` n'a aucune mémoire de ce qu'il a déjà envoyé une fois
+  # que Paperless retire le fichier de consume/ après ingestion — au cycle
+  # suivant, le fichier est toujours présent sur Drive (immuable) et absent de
+  # consume/, donc recopié, et Paperless en crée un **nouveau document** à
+  # chaque fois plutôt que de le rejeter (l'hypothèse initiale que la
+  # détection de doublon par hash de Paperless-ngx suffirait à absorber ça
+  # sans tracking custom s'est révélée fausse en pratique).
+  # Fix : un ledger persistant (/state/synced.tsv, sur un volume séparé de
+  # consume/ — jamais vidé par Paperless) mémorise chemin+taille+date de
+  # modification de chaque fichier déjà envoyé une fois ; un fichier qui
+  # réapparaît à l'identique n'est plus jamais recopié. Une modification
+  # réelle du fichier source (taille/date différentes) est toujours
+  # resynchronisée normalement.
   sidecar-gdrive-sync:
     image: alpine:3.20
     profiles: ["gdrive-sync"]
@@ -98,14 +106,30 @@ services:
     volumes:
       - ./rclone.conf:/rclone.conf:ro
       - ./consume:/consume
+      - gdrive-sync-state:/state
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
         apk add --no-cache rclone >/dev/null
+        STATE_FILE=/state/synced.tsv
+        touch "$$STATE_FILE"
         while true; do
           echo "$$(date -u +%FT%TZ) début de la synchronisation depuis $$GDRIVE_REMOTE_PATH"
-          rclone copy "$$GDRIVE_REMOTE_PATH" /consume --min-age 1m
+          rclone lsf --files-only -R --min-age 1m --format pst --separator '|' "$$GDRIVE_REMOTE_PATH" | \
+          while IFS='|' read -r path size modtime; do
+            [ -z "$$path" ] && continue
+            key="$$path|$$size|$$modtime"
+            if ! grep -qxF "$$key" "$$STATE_FILE"; then
+              echo "  nouveau (ou modifié) : $$path"
+              mkdir -p "/consume/$$(dirname "$$path")"
+              if rclone copyto "$$GDRIVE_REMOTE_PATH/$$path" "/consume/$$path"; then
+                echo "$$key" >> "$$STATE_FILE"
+              else
+                echo "  échec de copie pour $$path (retenté au prochain cycle)" >&2
+              fi
+            fi
+          done
           echo "$$(date -u +%FT%TZ) synchronisation terminée"
           sleep 300
         done
@@ -118,3 +142,4 @@ volumes:
   media:
   pgdata:
   redisdata:
+  gdrive-sync-state:
