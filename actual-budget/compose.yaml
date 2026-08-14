@@ -8,14 +8,19 @@ services:
     image: actualbudget/actual-server:latest-alpine
     restart: unless-stopped
     environment:
-      # edge (une fois branché) est l'unique appelant HTTP, toujours en
-      # 127.0.0.1 (network_mode: host côté edge, cf. edge/_plan/architecture.md) —
-      # à faire confiance comme proxy pour les en-têtes X-Forwarded-*.
-      ACTUAL_TRUSTED_PROXIES: "127.0.0.1"
+      # Depuis la migration vers le second serveur physique (_plan/plan.md
+      # phase 5), edge n'est plus sur la même machine : l'appelant HTTP
+      # arrive désormais avec l'IP LAN de la machine edge (192.168.1.99),
+      # plus jamais 127.0.0.1 — à faire confiance comme proxy pour les
+      # en-têtes X-Forwarded-*.
+      ACTUAL_TRUSTED_PROXIES: "192.168.1.99"
     volumes:
       - data:/data
     ports:
-      - "127.0.0.1:8083:5006"
+      # Publié sur l'IP LAN du second serveur (pas 127.0.0.1, pas 0.0.0.0) :
+      # la requête d'edge vient désormais du réseau local, pas de l'hôte
+      # local (cf. _plan/plan.md phase 5).
+      - "192.168.1.109:8083:5006"
     networks:
       - internal
 

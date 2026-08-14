@@ -51,7 +51,7 @@ Une table de routage, propre à `edge`, qui associe :
 |---|---|---|---|
 | `jvince.duckdns.org` (bitwarden) | `127.0.0.1:8081` | oui (DuckDNS + Let's Encrypt) | oui (`/notifications/hub` — routé, bug 3012 corrigé, voir `bitwarden/_plan/plan-migration-edge.md`) |
 | `paperless-jvince.duckdns.org` (paperless) | `192.168.1.109:8082` (second serveur physique, cf. `plan.md` phase 7) | oui (DuckDNS + Let's Encrypt) | non |
-| `budget.home.test` (actual-budget) | `127.0.0.1:8083` | oui — **auto-signé**, pas Let's Encrypt (voir ci-dessous) | non |
+| `budget.home.test` (actual-budget) | `192.168.1.109:8083` (second serveur physique, migré le 2026-08-14, cf. `plan.md` phase 10) | oui — **auto-signé**, pas Let's Encrypt (voir ci-dessous) | non |
 
 Note : `edge/compose.yaml` tourne en `network_mode: host` (voir Phase 4 de `plan.md`), donc l'upstream est bien `127.0.0.1:PORT` et non `host.docker.internal:PORT` — cette dernière forme a été essayée puis abandonnée (502 systématique, un port publié en `127.0.0.1` n'étant pas joignable depuis un réseau bridge Docker).
 
