@@ -48,9 +48,18 @@ authorize_log="$(mktemp)"
 trap 'rm -f "$authorize_log"' EXIT
 
 # -it obligatoire : rclone authorize attend un vrai terminal interactif.
+# --network host : rclone authorize sert lui-même une page de redirection
+# intermédiaire (vers Google) sur 127.0.0.1:53682 avant de recevoir le
+# callback OAuth. Ce 127.0.0.1 est celui du conteneur, pas celui de l'hôte —
+# un `-p 53682:53682` ne suffit pas (Docker route le trafic publié vers
+# l'interface externe du conteneur, jamais vers son propre loopback interne).
+# --network host fait partager au conteneur la pile réseau de l'hôte, donc
+# son 127.0.0.1 devient directement celui de la machine qui lance le script —
+# nécessite Docker Engine sur Linux (pas Docker Desktop macOS/Windows, où le
+# mode host n'est pas supporté de la même façon).
 # --drive-scope drive.readonly : demande le consentement Google en lecture
 # seule (pas "drive", qui donnerait un accès complet en écriture).
-docker run --rm -it rclone/rclone authorize "drive" --drive-scope drive.readonly | tee "$authorize_log"
+docker run --rm -it --network host rclone/rclone authorize "drive" --drive-scope drive.readonly | tee "$authorize_log"
 
 token_json="$(grep -o '{"access_token".*}' "$authorize_log" | tail -n1 || true)"
 
