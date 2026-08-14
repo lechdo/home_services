@@ -57,7 +57,7 @@ services:
       - ./export:/usr/src/paperless/export
       - ./consume:/usr/src/paperless/consume
     ports:
-      - "127.0.0.1:8082:8000"
+      - "192.168.1.109:8082:8000"
     networks:
       - internal
 
