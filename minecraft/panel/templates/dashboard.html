@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Panel Minecraft</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 26rem;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    }
+    h1 { font-size: 1.3rem; margin-top: 0; }
+    .status { font-size: 0.95rem; margin-bottom: 1.5rem; color: #444; }
+    .status .running { color: #2e7d32; font-weight: 600; }
+    .status .stopped { color: #c62828; font-weight: 600; }
+    label { display: block; margin-top: 1rem; font-size: 0.9rem; color: #444; }
+    select {
+      width: 100%;
+      padding: 0.5rem;
+      margin-top: 0.25rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 0.6rem;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    .start { background: #2e7d32; }
+    .stop { background: #c62828; }
+    .select { background: #455a64; }
+    button[disabled] { background: #bbb; cursor: not-allowed; }
+    .flash { color: #1565c0; margin-top: 1rem; font-size: 0.9rem; }
+    .logout { display: block; margin-top: 1.5rem; text-align: right; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Panel Minecraft</h1>
+    <div class="status">
+      État :
+      {% if status.state == "running" %}
+        <span class="running">en cours d'exécution</span> (map : {{ status.map }})
+      {% elif status.state == "absent" %}
+        <span class="stopped">jamais démarré</span>
+      {% elif status.state == "unknown" %}
+        <span class="stopped">indisponible (Docker inaccessible, réessayez dans quelques instants)</span>
+      {% else %}
+        <span class="stopped">arrêté</span> (dernière map : {{ status.map }})
+      {% endif %}
+    </div>
+
+    <form method="post" action="{{ url_for('select_map') }}">
+      <label for="map">Map active</label>
+      <select id="map" name="map" {% if status.state == "running" %}disabled{% endif %}>
+        {% for m in maps %}
+          <option value="{{ m }}" {% if m == current_selection %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="select" {% if status.state == "running" %}disabled{% endif %}>
+        Changer de map
+      </button>
+    </form>
+
+    <form method="post" action="{{ url_for('start') }}">
+      <button type="submit" class="start" {% if status.state == "running" %}disabled{% endif %}>
+        Démarrer le serveur
+      </button>
+    </form>
+
+    <form method="post" action="{{ url_for('stop') }}">
+      <button type="submit" class="stop" {% if status.state != "running" %}disabled{% endif %}>
+        Arrêter le serveur
+      </button>
+    </form>
+
+    {% for message in get_flashed_messages() %}
+      <p class="flash">{{ message }}</p>
+    {% endfor %}
+
+    <a class="logout" href="{{ url_for('logout') }}">Connecté en tant que {{ username }} — se déconnecter</a>
+  </div>
+</body>
+</html>

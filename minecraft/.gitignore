@@ -1,0 +1,8 @@
+.env
+panel/__pycache__/
+
+# Les mondes Minecraft sont des données utilisateur réelles (potentiellement
+# volumineuses, binaires) — jamais commitées. La structure des dossiers
+# (quelles maps existent) reste versionnée via .gitkeep.
+maps/*/*
+!maps/*/.gitkeep

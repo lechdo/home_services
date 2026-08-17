@@ -51,7 +51,9 @@ Une table de routage, propre à `edge`, qui associe :
 |---|---|---|---|
 | `jvince.duckdns.org` (bitwarden) | `127.0.0.1:8081` | oui (DuckDNS + Let's Encrypt) | oui (`/notifications/hub` — routé, bug 3012 corrigé, voir `bitwarden/_plan/plan-migration-edge.md`) |
 | `paperless-jvince.duckdns.org` (paperless) | `192.168.1.109:8082` (second serveur physique, cf. `plan.md` phase 7) | oui (DuckDNS + Let's Encrypt) | non |
+| `task-jvince.duckdns.org` (vikunja) | `127.0.0.1:8084` (Raspberry Pi, cf. `vikunja/_plan/plan.md` phase 3b) | oui (DuckDNS + Let's Encrypt) — bascule depuis le mode local le 2026-08-14, voir ci-dessous | non |
 | `budget.home.test` (actual-budget) | `192.168.1.109:8083` (second serveur physique, migré le 2026-08-14, cf. `plan.md` phase 10) | oui — **auto-signé**, pas Let's Encrypt (voir ci-dessous) | non |
+| `minecraft-jvince.duckdns.org` (panel minecraft) | `192.168.1.109:8086` (second serveur physique, cf. `plan.md` phase 12) | oui (DuckDNS + Let's Encrypt) | non |
 
 Note : `edge/compose.yaml` tourne en `network_mode: host` (voir Phase 4 de `plan.md`), donc l'upstream est bien `127.0.0.1:PORT` et non `host.docker.internal:PORT` — cette dernière forme a été essayée puis abandonnée (502 systématique, un port publié en `127.0.0.1` n'étant pas joignable depuis un réseau bridge Docker).
 
@@ -64,9 +66,19 @@ Le contrat d'intégration ci-dessus suppose implicitement qu'un service a besoin
 - Le contrat d'intégration côté backend reste identique (publier un port HTTP sur l'hôte, ne rien connaître d'edge) : seule la partie DNS public/Let's Encrypt est omise, pas le mécanisme de proxy.
 - **Correction découverte à l'usage (2026-08-13, actual-budget)** : un premier essai en **HTTP simple** (sans aucun certificat, pas même auto-signé) semblait suffire — jusqu'à ce qu'un vrai navigateur affiche une erreur fatale côté Actual (« besoin de l'accès à SharedArrayBuffer »). Un navigateur ne traite comme « contexte sécurisé » que HTTPS ou `localhost`/`127.0.0.1` — jamais un autre nom d'hôte en clair, même strictement local/LAN. Toute app qui a besoin d'un contexte sécurisé (`SharedArrayBuffer`, service workers...) exige donc HTTPS ici aussi, quitte à rester auto-signé. Ce n'était pas visible avec `curl` (aucune vérification de contexte sécurisé côté HTTP) ni en testant depuis la machine hébergeant `edge` elle-même le cas échéant (`127.0.0.1` bénéficie de l'exception navigateur). D'où : port 80 gardé uniquement comme redirection 301 vers le 443, jamais comme mode de service réel.
 - Limite actuelle : la résolution de `<nom>.home.test` n'est pas automatisée (pas de DNS local dans ce dépôt) — à ajouter manuellement dans le `/etc/hosts` de chaque appareil, ou accès direct par IP LAN de la machine qui héberge `edge` (fonctionne identiquement tant qu'un seul service local-only existe avec ce `server_name`, puisqu'il devient alors le fallback implicite pour tout `Host` non reconnu sur le 443).
+- **Historique (2026-08-14)** : `vikunja` est passé brièvement par ce mode local (`vikunja.home.test`) avant la création de son sous-domaine DuckDNS le jour même — pendant cette fenêtre, deux services local-only coexistaient (`budget.home.test` et `vikunja.home.test`), et le fallback par IP nue ne pouvait plus servir qu'un seul des deux (le premier bloc chargé par nginx, ordre alphabétique des fichiers `conf.d/*.conf`). Redevenu vrai à nouveau depuis que `vikunja` a rejoint la table DuckDNS ci-dessus : `budget.home.test` est de nouveau l'unique service local-only. À reconsidérer si un futur service reste en mode local à son tour.
 - Évolution naturelle : si le service a un jour besoin d'un accès Internet, il rejoint la table ci-dessus (sous-domaine DuckDNS + certificat Let's Encrypt), en suivant le contrat standard — remplace le certificat auto-signé, ne change rien au mécanisme de proxy.
 
 Cette table vit uniquement dans `/edge/` (ex. `nginx/conf.d/*.conf` générés ou statiques). Ajouter un service = ajouter une entrée ici, sans toucher au service backend au-delà de la Phase 1 du contrat ci-dessus.
+
+## Cas particulier : un service qui parle un protocole non-HTTP (minecraft)
+
+Le contrat d'intégration ci-dessus suppose implicitement que le trafic à router est du HTTP/HTTPS (routage L7 par `Host` header, terminaison TLS). Depuis `minecraft` (`plan.md` phase 12, 2026-08-17), un service peut aussi avoir besoin d'exposer un port qui parle un protocole binaire propriétaire (le protocole réseau du jeu Minecraft, sur TCP 25565) — un reverse-proxy L7 ne peut pas router ce trafic.
+
+- Ce port est routé via un bloc `stream {}` nginx (proxy L4, TCP brut) plutôt que `http {}` — premier usage de ce module dans ce dépôt. Config dans `nginx/stream.d/*.conf` (analogue à `conf.d/*.conf` pour le HTTP), incluse depuis un `nginx.conf` personnalisé (`nginx/nginx.conf`, remplace celui livré par défaut dans l'image nginx — nécessaire car le bloc `stream {}` doit vivre au niveau racine de la config, pas dans `conf.d/` qui n'est inclus que dans `http {}`).
+- Aucune terminaison TLS sur ce port (le protocole du jeu n'en a pas la notion) et aucune page d'erreur possible si le backend ne répond pas (pas de HTTP à ce niveau) — un client Minecraft dont le serveur est éteint voit un échec de connexion natif, pas une page personnalisée.
+- Le contrat d'intégration côté backend reste le même dans l'esprit (publier un port sur l'hôte, edge route sans que le backend ne le sache) — seule la couche de transport change (L4 au lieu de L7).
+- Le panel web de gestion de ce même service (démarrer/arrêter le serveur, changer de map), lui, reste un service HTTP tout à fait standard et suit le contrat habituel (table de routage ci-dessus) — un même service backend peut donc avoir une entrée dans `conf.d/` **et** une entrée dans `stream.d/`, chacune pour un port distinct.
 
 ## DDNS et ACME centralisés : pourquoi c'est correct de mutualiser ici
 

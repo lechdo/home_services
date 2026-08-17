@@ -15,7 +15,13 @@ services:
     # mode : nginx écoute le 443 directement sur l'hôte via sa propre config.
     network_mode: host
     volumes:
+      # nginx.conf personnalisé (ajout du bloc stream {} pour le port de jeu
+      # Minecraft, cf. minecraft/CLAUDE.md) — reprend fidèlement le
+      # nginx.conf par défaut de l'image nginx:1.27-alpine, rien retiré côté
+      # http {}, voir le fichier lui-même pour le détail.
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/stream.d:/etc/nginx/stream.d:ro
       - ./nginx/error-pages:/etc/nginx/error-pages:ro
       - certs:/etc/nginx/certs:ro
     # Reload périodique : nginx ne relit jamais un certificat déjà chargé sans

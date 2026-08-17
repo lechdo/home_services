@@ -1,0 +1,4 @@
+flask==3.0.*
+docker==7.1.*
+bcrypt==4.2.*
+waitress==3.0.*

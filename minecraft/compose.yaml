@@ -1,0 +1,61 @@
+services:
+  # docker-socket-proxy : seul composant de ce service qui a accès au socket
+  # Docker de l'hôte, à travers une API filtrée (voir variables ci-dessous).
+  # Jamais publié sur l'hôte ("ports:" absent) — uniquement joignable par
+  # "panel" via le réseau interne par défaut du projet. Raison : ce service
+  # est exposé sur Internet derrière une simple authentification à ~10
+  # comptes (minecraft/CLAUDE.md) ; monter /var/run/docker.sock directement
+  # dans "panel" donnerait un accès root-équivalent à tout l'hôte en cas de
+  # compromission du panel.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      # Portée minimale nécessaire à "panel" : créer/inspecter/démarrer/
+      # arrêter/supprimer le conteneur "minecraft-mc" (CONTAINERS + POST),
+      # et s'assurer que l'image existe avant de créer ce conteneur (IMAGES).
+      # Tout le reste (VOLUMES, EXEC, INFO, NETWORKS, SWARM, SYSTEM, PLUGINS,
+      # SERVICES, TASKS, BUILD, COMMIT, CONFIGS, DISTRIBUTION, EVENTS,
+      # SECRETS, SESSION...) reste à 0 par défaut, c'est-à-dire refusé.
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  panel:
+    build: ./panel
+    restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      # Chemin ABSOLU de ce dossier (minecraft/) sur l'hôte qui exécute
+      # Docker — pas un chemin vu depuis l'intérieur du conteneur "panel".
+      # Nécessaire car les binds passés à l'API Docker sont résolus par le
+      # daemon Docker de l'hôte, jamais par le conteneur qui fait l'appel.
+      # Voir .env.example.
+      HOST_PROJECT_DIR: "${HOST_PROJECT_DIR}"
+      MC_MEMORY: "${MC_MEMORY:-6G}"
+      MC_LAN_IP: "${MC_LAN_IP:-192.168.1.109}"
+      SECRET_KEY: "${PANEL_SECRET_KEY}"
+    volumes:
+      # Lecture seule : le panel ne fait que lister les dossiers présents
+      # pour peupler le sélecteur de map, il n'écrit jamais dans "maps/"
+      # lui-même (créer une nouvelle map = geste manuel, cf. README.md).
+      - ./maps:/app/maps:ro
+      - panel-data:/app/data
+    ports:
+      - "${MC_LAN_IP:-192.168.1.109}:8086:8086"
+
+  # Le conteneur du serveur Minecraft lui-même ("minecraft-mc") n'est PAS
+  # déclaré ici, volontairement : son identité (bind mount /data, qui
+  # dépend de la map choisie) change à l'usage, à la demande de l'utilisateur
+  # via le panel — ce n'est pas une propriété statique d'infrastructure que
+  # `docker compose` doit posséder, mais un état d'exécution possédé par
+  # "panel" lui-même via le SDK Docker (voir panel/app.py). Le déclarer aussi
+  # ici créerait deux sources de vérité concurrentes pour le même conteneur.
+  # Image utilisée par "panel" : itzg/minecraft-server (TYPE=PAPER).
+
+volumes:
+  panel-data:
