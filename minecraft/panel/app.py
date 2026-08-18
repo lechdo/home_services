@@ -413,6 +413,23 @@ def broadcast(message):
         pass
 
 
+LIST_RE = re.compile(r"There are (\d+) of a max(?: of| imum)? (\d+) players online")
+
+
+def player_count():
+    # Best-effort comme broadcast() : un échec RCON (serveur pas encore prêt,
+    # commande localisée différemment) ne doit jamais faire planter /status,
+    # simplement ne rien afficher.
+    try:
+        response = rcon_command("list")
+    except Exception:
+        return None
+    match = LIST_RE.search(response)
+    if not match:
+        return None
+    return {"online": int(match.group(1)), "max": int(match.group(2))}
+
+
 def format_duration(seconds):
     if seconds is None:
         return None
@@ -638,6 +655,10 @@ def dashboard_context():
         "current_difficulty": map_difficulty(current_map) if current_map else None,
         "session_remaining": session_remaining(),
         "session_remaining_label": format_duration(session_remaining()),
+        # Uniquement quand "running" (pas "starting") : le serveur n'accepte
+        # pas encore RCON pendant le chargement du monde, même logique que
+        # server_ready() pour l'état affiché.
+        "player_count": player_count() if status["state"] == "running" else None,
         "renewal_hours": RENEWAL_HOURS,
         "current_gif": current_gif(),
         "plugins": PLUGINS,

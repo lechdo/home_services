@@ -113,6 +113,10 @@
       Arrêt automatique dans : <strong id="session-remaining">{{ session_remaining_label }}</strong>
     </div>
 
+    <div class="status" id="player-count-row" {% if not player_count %}style="display: none"{% endif %}>
+      Joueurs connectés : <strong id="player-count">{% if player_count %}{{ player_count.online }} / {{ player_count.max }}{% endif %}</strong>
+    </div>
+
     {% if current_gif %}
     <img id="running-gif" data-name="{{ current_gif }}"
          src="{{ url_for('static', filename='gifs/' + current_gif) }}" alt=""
@@ -278,6 +282,14 @@
       } else {
         remainingRow.style.display = "";
         document.getElementById("session-remaining").textContent = formatDuration(data.session_remaining);
+      }
+
+      const playerRow = document.getElementById("player-count-row");
+      if (data.player_count) {
+        playerRow.style.display = "";
+        document.getElementById("player-count").textContent = data.player_count.online + " / " + data.player_count.max;
+      } else {
+        playerRow.style.display = "none";
       }
     }
 
