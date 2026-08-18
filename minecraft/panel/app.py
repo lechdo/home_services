@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import secrets
 import shutil
@@ -20,6 +21,7 @@ DATA_DIR = "/app/data"
 PLUGIN_CACHE_DIR = os.path.join(DATA_DIR, "plugin-cache")
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
+GIFS_DIR = os.path.join(os.path.dirname(__file__), "static", "gifs")
 
 CONTAINER_NAME = "minecraft-mc"
 IMAGE = "itzg/minecraft-server:latest"
@@ -33,10 +35,12 @@ RCON_PORT = 25575
 DIFFICULTIES = ["peaceful", "easy", "normal", "hard"]
 MAP_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 
-# Minuteur de session : le serveur s'arrête tout seul 2h après un démarrage
-# (ou un renouvellement), avec des messages in-game (RCON) aux trois seuils
-# ci-dessous avant l'arrêt automatique — besoin exprimé par l'utilisateur.
+# Minuteur de session : le serveur s'arrête tout seul 2h après un démarrage,
+# avec des messages in-game (RCON) aux trois seuils ci-dessous avant l'arrêt
+# automatique — besoin exprimé par l'utilisateur. Le renouvellement, lui,
+# permet de choisir la durée de la prolongation (2h, 3h ou 5h).
 SESSION_DURATION = 2 * 60 * 60
+RENEWAL_HOURS = (2, 3, 5)
 WARNING_THRESHOLDS = (15 * 60, 10 * 60, 5 * 60)
 
 # Plugins proposés depuis le panel — catalogue volontairement restreint (pas
@@ -221,6 +225,34 @@ def create_map(name):
     os.makedirs(os.path.join(MAPS_DIR, name))
 
 
+# --- Illustration (gif) affichée pendant que le serveur tourne ---
+
+def available_gifs():
+    if not os.path.isdir(GIFS_DIR):
+        return []
+    return sorted(name for name in os.listdir(GIFS_DIR) if name.lower().endswith(".gif"))
+
+
+def roll_random_gif():
+    # Nouveau tirage aléatoire — appelé à chaque chargement complet de la
+    # page et à chaque démarrage du serveur (besoin exprimé par l'utilisateur),
+    # pas à chaque poll de /status (sinon le gif changerait toutes les 3s).
+    gifs = available_gifs()
+    if not gifs:
+        return None
+    chosen = random.choice(gifs)
+    update_state(current_gif=chosen)
+    return chosen
+
+
+def current_gif():
+    gifs = available_gifs()
+    if not gifs:
+        return None
+    chosen = load_state().get("current_gif")
+    return chosen if chosen in gifs else roll_random_gif()
+
+
 # --- Plugins (catalogue restreint, récupérés à la demande depuis Modrinth) ---
 
 def plugin_jar_path(map_name, key):
@@ -395,10 +427,11 @@ def session_expires_at():
     return load_state().get("session_expires_at")
 
 
-def start_session_timer():
+def start_session_timer(duration=SESSION_DURATION):
     # Reset complet : un nouveau démarrage comme un renouvellement repartent
-    # sur une fenêtre pleine de 2h, avec les trois seuils à re-notifier.
-    update_state(session_expires_at=time.time() + SESSION_DURATION, session_notified=[])
+    # sur une fenêtre pleine (2h au démarrage, durée choisie au renouvellement),
+    # avec les trois seuils à re-notifier.
+    update_state(session_expires_at=time.time() + duration, session_notified=[])
 
 
 def session_remaining():
@@ -548,6 +581,7 @@ def start_server(map_name):
         container.start()
 
     start_session_timer()
+    roll_random_gif()
 
 
 def stop_server():
@@ -604,6 +638,8 @@ def dashboard_context():
         "current_difficulty": map_difficulty(current_map) if current_map else None,
         "session_remaining": session_remaining(),
         "session_remaining_label": format_duration(session_remaining()),
+        "renewal_hours": RENEWAL_HOURS,
+        "current_gif": current_gif(),
         "plugins": PLUGINS,
         "plugin_enabled": (
             {key: is_plugin_enabled(current_map, key) for key in PLUGINS}
@@ -619,6 +655,7 @@ def dashboard_context():
 @app.route("/")
 @login_required
 def dashboard():
+    roll_random_gif()  # nouveau tirage à chaque chargement complet de la page
     return render_template(
         "dashboard.html",
         username=session["user"],
@@ -631,6 +668,7 @@ def dashboard():
 def status_json():
     context = dashboard_context()
     context.pop("plugins")  # catalogue statique, pas besoin de le repousser à chaque poll
+    context.pop("renewal_hours")  # idem : liste statique de choix
     return jsonify(context)
 
 
@@ -735,12 +773,19 @@ def stop():
 @app.route("/renew-session", methods=["POST"])
 @login_required
 def renew_session():
+    try:
+        hours = int(request.form.get("hours", ""))
+    except ValueError:
+        hours = None
+
     if server_status()["state"] not in ("running", "starting"):
         flash("Le serveur n'est pas en cours d'exécution.")
+    elif hours not in RENEWAL_HOURS:
+        flash("Durée de renouvellement invalide.")
     else:
-        start_session_timer()
-        broadcast("Minuteur du serveur remis a 2h.")
-        flash("Minuteur remis à 2h.")
+        start_session_timer(hours * 60 * 60)
+        broadcast(f"Minuteur du serveur remis a {hours}h.")
+        flash(f"Minuteur remis à {hours}h.")
     return redirect(url_for("dashboard"))
 
 

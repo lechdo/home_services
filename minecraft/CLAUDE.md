@@ -46,7 +46,7 @@ Catalogue volontairement restreint à ces deux besoins exprimés — pas de mark
 
 ## Minuteur de session et notifications in-game (RCON)
 
-Chaque démarrage (ou renouvellement) déclenche une fenêtre de 2h, après laquelle le serveur s'arrête tout seul — besoin exprimé par l'utilisateur pour éviter un serveur qui tourne indéfiniment sans surveillance. Le panel expose un bouton « Renouveler (+2h) » qui remet le compte à zéro à tout moment pendant que le serveur tourne.
+Chaque démarrage déclenche une fenêtre de 2h, après laquelle le serveur s'arrête tout seul — besoin exprimé par l'utilisateur pour éviter un serveur qui tourne indéfiniment sans surveillance. Le panel expose un bouton « Renouveler » avec un choix de durée (2h, 3h ou 5h — `RENEWAL_HOURS` dans `app.py`) qui remet le compte à zéro à tout moment pendant que le serveur tourne, pour la durée choisie.
 
 - Échéance (`session_expires_at`) persistée dans `panel-data/state.json` (survit à un redémarrage du panel), avec la liste des seuils déjà notifiés (`session_notified`) pour ne jamais renvoyer deux fois le même message.
 - Un thread de fond (`session_watchdog`, même logique que le pattern déjà utilisé pour start/stop asynchrones) vérifie toutes les 10s le temps restant tant que le serveur est réellement `running` (pas `starting`), envoie un message à tous les joueurs (`say ...` via RCON) aux seuils 15/10/5 minutes avant l'arrêt, puis déclenche l'arrêt automatique à échéance.
@@ -61,6 +61,10 @@ Le panel affiche la version Minecraft et la version Paper de la map sélectionn�
 ## Dynamisme visuel et rafraîchissement automatique
 
 Le tableau de bord s'actualise seul (JS, `fetch` toutes les 3s vers `/status`, pas de rechargement de page) plutôt que de rester figé sur l'état lu au chargement — nécessaire car un démarrage/arrêt réel prend de 10s à 90s. `/start` et `/stop` sont asynchrones (exécutés dans un thread à part, un seul à la fois) : la requête HTTP répond immédiatement, l'état affiché passe par `starting`/`stopping` (indicateur animé) avant `running`/`stopped` (point statique). `starting` reflète la disponibilité réelle du serveur (recherche de `]: Done (` dans `logs/latest.log`), pas le simple état "conteneur lancé" de Docker — Paper met encore 30 à 90s à charger le monde après ce point.
+
+## Illustration animée pendant que le serveur tourne
+
+Le tableau de bord affiche un gif (parmi plusieurs disponibles sous `panel/static/gifs/`) quand l'état est `running`. Le gif affiché est tiré au hasard (`roll_random_gif()` dans `app.py`) à chaque chargement complet de la page et à chaque démarrage réel du serveur — jamais à chaque poll `/status` (sinon il changerait toutes les 3s). Le choix courant est persisté dans `panel-data/state.json` (`current_gif`) pour que le poll JS puisse resynchroniser l'`<img>` sans le retirer lui-même. Purement décoratif, aucun gif n'est versionné dans git (voir `.gitignore`) — ajouter/retirer des fichiers `.gif` sous `panel/static/gifs/` suffit à faire évoluer le tirage.
 
 ## Authentification du panel
 

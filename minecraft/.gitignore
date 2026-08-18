@@ -6,3 +6,9 @@ panel/__pycache__/
 # (quelles maps existent) reste versionnée via .gitkeep.
 maps/*/*
 !maps/*/.gitkeep
+
+# Gifs décoratifs affichés sur le tableau de bord pendant que le serveur
+# tourne (voir minecraft/CLAUDE.md) — purement esthétiques, potentiellement
+# volumineux, ajoutés/retirés librement sans passer par git.
+panel/static/gifs/*
+!panel/static/gifs/.gitkeep

@@ -113,6 +113,12 @@
       Arrêt automatique dans : <strong id="session-remaining">{{ session_remaining_label }}</strong>
     </div>
 
+    {% if current_gif %}
+    <img id="running-gif" data-name="{{ current_gif }}"
+         src="{{ url_for('static', filename='gifs/' + current_gif) }}" alt=""
+         style="width: 100%; border-radius: 8px; margin-bottom: 1rem; {% if status.state != 'running' %}display: none;{% endif %}">
+    {% endif %}
+
     {% if current_selection %}
     <div class="status">
       Version ({{ current_selection }}) :
@@ -151,8 +157,14 @@
     </form>
 
     <form method="post" action="{{ url_for('renew_session') }}">
+      <label for="renew-hours">Renouveler pour</label>
+      <select id="renew-hours" name="hours" {% if status.state not in ("running", "starting") %}disabled{% endif %}>
+        {% for h in renewal_hours %}
+          <option value="{{ h }}" {% if h == 2 %}selected{% endif %}>{{ h }}h</option>
+        {% endfor %}
+      </select>
       <button type="submit" id="btn-renew" class="select" {% if status.state not in ("running", "starting") %}disabled{% endif %}>
-        Renouveler (+2h)
+        Renouveler
       </button>
     </form>
 
@@ -235,6 +247,17 @@
       document.getElementById("state-label").textContent = STATE_LABELS[state] || state;
       document.getElementById("state-map-suffix").textContent = data.status.map ? " (map : " + data.status.map + ")" : "";
 
+      const gifEl = document.getElementById("running-gif");
+      if (gifEl && data.current_gif) {
+        // Reflète un tirage fait côté serveur (ex. démarrage lancé depuis un
+        // autre onglet) sans re-tirer nous-mêmes à chaque poll de 3s.
+        if (gifEl.dataset.name !== data.current_gif) {
+          gifEl.dataset.name = data.current_gif;
+          gifEl.src = "/static/gifs/" + data.current_gif;
+        }
+        gifEl.style.display = state === "running" ? "" : "none";
+      }
+
       const versionEl = document.getElementById("version-line");
       if (versionEl) {
         versionEl.textContent = data.server_version
@@ -244,7 +267,9 @@
 
       document.getElementById("btn-start").disabled = !(state === "stopped" || state === "absent");
       document.getElementById("btn-stop").disabled = !(state === "running" || state === "starting");
-      document.getElementById("btn-renew").disabled = !(state === "running" || state === "starting");
+      const renewActive = state === "running" || state === "starting";
+      document.getElementById("btn-renew").disabled = !renewActive;
+      document.getElementById("renew-hours").disabled = !renewActive;
       document.querySelectorAll(".lock-when-active").forEach((el) => { el.disabled = data.locked; });
 
       const remainingRow = document.getElementById("session-remaining-row");
