@@ -39,11 +39,17 @@ services:
       MC_MEMORY: "${MC_MEMORY:-6G}"
       MC_LAN_IP: "${MC_LAN_IP:-192.168.1.109}"
       SECRET_KEY: "${PANEL_SECRET_KEY}"
+      # false tant que le panel est testé en HTTP direct (avant intégration
+      # edge) — repasser à true (ou retirer la ligne dans .env) une fois
+      # servi en HTTPS via https://minecraft-jvince.duckdns.org.
+      COOKIE_SECURE: "${PANEL_COOKIE_SECURE:-true}"
     volumes:
-      # Lecture seule : le panel ne fait que lister les dossiers présents
-      # pour peupler le sélecteur de map, il n'écrit jamais dans "maps/"
-      # lui-même (créer une nouvelle map = geste manuel, cf. README.md).
-      - ./maps:/app/maps:ro
+      # Lecture-écriture : le panel crée les dossiers de nouvelles maps
+      # (bouton dédié) et y copie les plugins activés (dossier plugins/ de
+      # la map). Le conteneur du serveur Minecraft, lui, ne monte que le
+      # dossier de la map active (voir start_server() dans panel/app.py),
+      # jamais tout "maps/" — ce montage large reste propre au panel.
+      - ./maps:/app/maps:rw
       - panel-data:/app/data
     ports:
       - "${MC_LAN_IP:-192.168.1.109}:8086:8086"
@@ -59,3 +65,13 @@ services:
 
 volumes:
   panel-data:
+
+# Nom fixe (plutôt que le nom généré par défaut, dérivé du dossier) : "panel"
+# doit pouvoir recréer le conteneur "minecraft-mc" via le SDK Docker en le
+# rattachant explicitement à CE réseau (voir start_server() dans
+# panel/app.py), pour lui parler en RCON par nom de conteneur — sans jamais
+# publier le port RCON sur l'hôte/LAN, même logique de moindre privilège que
+# docker-socket-proxy.
+networks:
+  default:
+    name: minecraft_net

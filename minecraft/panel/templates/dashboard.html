@@ -23,18 +23,35 @@
       box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
     }
     h1 { font-size: 1.3rem; margin-top: 0; }
+    h2 { font-size: 1rem; margin: 1.75rem 0 0; border-top: 1px solid #eee; padding-top: 1.25rem; }
     .status { font-size: 0.95rem; margin-bottom: 1.5rem; color: #444; }
-    .status .running { color: #2e7d32; font-weight: 600; }
-    .status .stopped { color: #c62828; font-weight: 600; }
+    .status strong { font-weight: 600; }
     label { display: block; margin-top: 1rem; font-size: 0.9rem; color: #444; }
-    select {
+    select, input[type="text"] {
       width: 100%;
       padding: 0.5rem;
       margin-top: 0.25rem;
       border: 1px solid #ccc;
       border-radius: 6px;
       box-sizing: border-box;
+      font: inherit;
     }
+    .plugin-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+    }
+    .plugin-row button {
+      margin-top: 0;
+      width: auto;
+      padding: 0.3rem 0.8rem;
+      font-size: 0.85rem;
+      background: #455a64;
+    }
+    .plugin-row .enabled { color: #2e7d32; }
+    .plugin-row .disabled { color: #888; }
     button {
       margin-top: 1rem;
       width: 100%;
@@ -47,51 +64,133 @@
     }
     .start { background: #2e7d32; }
     .stop { background: #c62828; }
-    .select { background: #455a64; }
+    .select, .create { background: #455a64; }
     button[disabled] { background: #bbb; cursor: not-allowed; }
     .flash { color: #1565c0; margin-top: 1rem; font-size: 0.9rem; }
     .logout { display: block; margin-top: 1.5rem; text-align: right; font-size: 0.85rem; }
+
+    /* Indicateur d'état : point statique (allumé/éteint) ou anneau animé
+       (démarrage/arrêt en cours) — même élément, classe différente. */
+    .dot {
+      display: inline-block;
+      width: 0.7em;
+      height: 0.7em;
+      border-radius: 50%;
+      margin-right: 0.4em;
+      vertical-align: middle;
+      box-sizing: border-box;
+    }
+    .dot.running { background: #2e7d32; animation: pulse 1.6s ease-in-out infinite; }
+    .dot.stopped { background: #c62828; }
+    .dot.absent { background: #999; }
+    .dot.unknown { background: #f9a825; }
+    .dot.starting, .dot.stopping {
+      background: transparent;
+      border: 2px solid #cfd8dc;
+      border-top-color: #1565c0;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Panel Minecraft</h1>
+
     <div class="status">
       État :
-      {% if status.state == "running" %}
-        <span class="running">en cours d'exécution</span> (map : {{ status.map }})
-      {% elif status.state == "absent" %}
-        <span class="stopped">jamais démarré</span>
-      {% elif status.state == "unknown" %}
-        <span class="stopped">indisponible (Docker inaccessible, réessayez dans quelques instants)</span>
-      {% else %}
-        <span class="stopped">arrêté</span> (dernière map : {{ status.map }})
-      {% endif %}
+      <span id="state-dot" class="dot {{ status.state }}"></span>
+      <strong id="state-label">
+        {{ {"running": "en cours d'exécution", "starting": "démarrage en cours…",
+            "stopping": "arrêt en cours…", "stopped": "arrêté", "absent": "jamais démarré",
+            "unknown": "indisponible (Docker inaccessible)"}[status.state] }}
+      </strong>
+      <span id="state-map-suffix">{% if status.map %} (map : {{ status.map }}){% endif %}</span>
     </div>
+
+    <div class="status" id="session-remaining-row" {% if session_remaining is none %}style="display: none"{% endif %}>
+      Arrêt automatique dans : <strong id="session-remaining">{{ session_remaining_label }}</strong>
+    </div>
+
+    {% if current_selection %}
+    <div class="status">
+      Version ({{ current_selection }}) :
+      <span id="version-line">
+        {% if server_version %}
+          Minecraft {{ server_version.minecraft or "?" }} · Paper {{ server_version.paper or "?" }}
+        {% else %}
+          inconnue (démarrez le serveur au moins une fois)
+        {% endif %}
+      </span>
+    </div>
+    {% endif %}
 
     <form method="post" action="{{ url_for('select_map') }}">
       <label for="map">Map active</label>
-      <select id="map" name="map" {% if status.state == "running" %}disabled{% endif %}>
+      <select id="map" name="map" class="lock-when-active" {% if locked %}disabled{% endif %}>
         {% for m in maps %}
           <option value="{{ m }}" {% if m == current_selection %}selected{% endif %}>{{ m }}</option>
         {% endfor %}
       </select>
-      <button type="submit" class="select" {% if status.state == "running" %}disabled{% endif %}>
+      <button type="submit" class="select lock-when-active" {% if locked %}disabled{% endif %}>
         Changer de map
       </button>
     </form>
 
     <form method="post" action="{{ url_for('start') }}">
-      <button type="submit" class="start" {% if status.state == "running" %}disabled{% endif %}>
+      <button type="submit" id="btn-start" class="start" {% if status.state not in ("stopped", "absent") %}disabled{% endif %}>
         Démarrer le serveur
       </button>
     </form>
 
     <form method="post" action="{{ url_for('stop') }}">
-      <button type="submit" class="stop" {% if status.state != "running" %}disabled{% endif %}>
+      <button type="submit" id="btn-stop" class="stop" {% if status.state not in ("running", "starting") %}disabled{% endif %}>
         Arrêter le serveur
       </button>
     </form>
+
+    <form method="post" action="{{ url_for('renew_session') }}">
+      <button type="submit" id="btn-renew" class="select" {% if status.state not in ("running", "starting") %}disabled{% endif %}>
+        Renouveler (+2h)
+      </button>
+    </form>
+
+    <h2>Nouvelle map</h2>
+    <form method="post" action="{{ url_for('create_map_route') }}">
+      <label for="name">Nom (devient le nom du dossier)</label>
+      <input type="text" id="name" name="name" pattern="[a-zA-Z0-9_-]{1,32}" required
+             placeholder="ex. skyblock">
+      <button type="submit" class="create">Créer la map</button>
+    </form>
+
+    {% if current_selection %}
+    <h2>Difficulté — {{ current_selection }}</h2>
+    <form method="post" action="{{ url_for('set_difficulty') }}">
+      <select name="difficulty" class="lock-when-active" {% if locked %}disabled{% endif %}>
+        {% for d in difficulties %}
+          <option value="{{ d }}" {% if d == current_difficulty %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="select lock-when-active" {% if locked %}disabled{% endif %}>
+        Appliquer (au prochain démarrage)
+      </button>
+    </form>
+
+    <h2>Plugins — {{ current_selection }}</h2>
+    {% for key, plugin in plugins.items() %}
+      <form method="post" action="{{ url_for('toggle_plugin') }}" class="plugin-row">
+        <input type="hidden" name="plugin" value="{{ key }}">
+        <span class="{{ 'enabled' if plugin_enabled[key] else 'disabled' }}">
+          {{ '✓' if plugin_enabled[key] else '✗' }}
+        </span>
+        <span style="flex: 1">{{ plugin.label }}</span>
+        <button type="submit" class="lock-when-active" {% if locked %}disabled{% endif %}>
+          {{ 'Désactiver' if plugin_enabled[key] else 'Activer' }}
+        </button>
+      </form>
+    {% endfor %}
+    {% endif %}
 
     {% for message in get_flashed_messages() %}
       <p class="flash">{{ message }}</p>
@@ -99,5 +198,65 @@
 
     <a class="logout" href="{{ url_for('logout') }}">Connecté en tant que {{ username }} — se déconnecter</a>
   </div>
+
+  <script>
+    // Rafraîchit l'état (et la version) toutes les 3s sans recharger la page
+    // entière — utile car un démarrage/arrêt réel prend de 10s à 90s, pendant
+    // lesquelles la page restait figée sur l'état d'avant sans ce mécanisme.
+    const STATE_LABELS = {
+      running: "en cours d'exécution",
+      starting: "démarrage en cours…",
+      stopping: "arrêt en cours…",
+      stopped: "arrêté",
+      absent: "jamais démarré",
+      unknown: "indisponible (Docker inaccessible)",
+    };
+
+    function formatDuration(seconds) {
+      if (seconds < 60) return "< 1 min";
+      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(minutes / 60);
+      const rest = minutes % 60;
+      return hours ? hours + "h " + String(rest).padStart(2, "0") + "min" : rest + "min";
+    }
+
+    async function poll() {
+      let data;
+      try {
+        const res = await fetch("/status");
+        if (!res.ok) return;
+        data = await res.json();
+      } catch (e) {
+        return; // panel ou réseau temporairement indisponible : on réessaiera au prochain tick
+      }
+
+      const state = data.status.state;
+      document.getElementById("state-dot").className = "dot " + state;
+      document.getElementById("state-label").textContent = STATE_LABELS[state] || state;
+      document.getElementById("state-map-suffix").textContent = data.status.map ? " (map : " + data.status.map + ")" : "";
+
+      const versionEl = document.getElementById("version-line");
+      if (versionEl) {
+        versionEl.textContent = data.server_version
+          ? "Minecraft " + (data.server_version.minecraft || "?") + " · Paper " + (data.server_version.paper || "?")
+          : "inconnue (démarrez le serveur au moins une fois)";
+      }
+
+      document.getElementById("btn-start").disabled = !(state === "stopped" || state === "absent");
+      document.getElementById("btn-stop").disabled = !(state === "running" || state === "starting");
+      document.getElementById("btn-renew").disabled = !(state === "running" || state === "starting");
+      document.querySelectorAll(".lock-when-active").forEach((el) => { el.disabled = data.locked; });
+
+      const remainingRow = document.getElementById("session-remaining-row");
+      if (data.session_remaining === null || data.session_remaining === undefined) {
+        remainingRow.style.display = "none";
+      } else {
+        remainingRow.style.display = "";
+        document.getElementById("session-remaining").textContent = formatDuration(data.session_remaining);
+      }
+    }
+
+    setInterval(poll, 3000);
+  </script>
 </body>
 </html>
