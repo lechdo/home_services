@@ -6,7 +6,7 @@ Voir `conversation.md` (échange de conception d'origine) et `_plan/` (plan de r
 
 **Dernier état (2026-08-14)** : socle Docker Compose implémenté et validé (Phase 0 partielle), exposition Internet via `edge` faite (Phase 8), synchronisation Google Drive préparée mais pas activée (Phase 1), modélisation Custom Fields faite et validée (Phase 2), squelette RAD/LAD + webhook Paperless implémentés et validés de bout en bout (Phase 3) — la classification/extraction elle-même (Phase 4+) n'est pas encore développée, et aucun document réel (hors tests) n'a encore été traité. Migration vers un second serveur dédié en cours (Phase 9) : socle re-déployé et validé sur ce second serveur (instance neuve, pas encore reliée à `edge`) — voir `_plan/plan.md` phase 9 pour le détail et ce qui reste à faire (migration des données réelles, câblage edge, IP LAN).
 
-- Services : `db` (postgres), `broker` (redis — non anticipé à la conception, nécessaire pour la file de tâches de Paperless-ngx), `paperless` (webserver, image `paperlessngx/paperless-ngx` — le mirroir Docker Hub, `ghcr.io/paperless-ngx/paperless-ngx` étant refusé dans l'environnement de test utilisé).
+- Services : `db` (postgres), `broker` (redis — non anticipé à la conception, nécessaire pour la file de tâches de Paperless-ngx), `paperless` (webserver, image `paperlessngx/paperless-ngx` — le mirroir Docker Hub, `ghcr.io/paperless-ngx/paperless-ngx` étant refusé dans l'environnement de test utilisé), `gotenberg` + `tika` (conversion/extraction, nécessaires pour consommer les fichiers `.eml`, jamais exposés sur l'hôte).
 - Webserver publié sur `127.0.0.1:8082`, `PAPERLESS_URL=https://paperless-jvince.duckdns.org` (le sous-domaine réel, possédé et routé par `/edge/` — rien de DNS/TLS ici).
 - **Validé réellement** : démarrage propre (migrations Django appliquées, `healthy`), page de connexion accessible en local et via `edge` (`https://paperless-jvince.duckdns.org`, certificat staging).
 - **Fait** : 10 types de documents créés (`Facture`, `Contrat`, `Relevé bancaire`, `Courrier administratif`, `Bulletin de salaire`, `Impôt`, `Assurance`, puis `Lucas`, `Virginie`, `Julien` sur demande explicite — écart volontaire par rapport à la distinction type/tag documentée dans `_plan/data-model.md`, voir `_plan/plan.md` phase 0) et 6 tags de base (`EDF`, `maison`, `à vérifier`, `important`, `comptabilité`, `mdph`), via l'API REST, avec `matching_algorithm: 6` (Auto).
@@ -103,6 +103,15 @@ Si cette machine n'est pas celle qui héberge paperless en prod, copie le `rclon
 ```
 
 Le script vérifie que `GDRIVE_REMOTE_PATH` (dossier `controlled_chaos` par défaut, cf. `.env`) est bien lisible, active `COMPOSE_PROFILES=gdrive-sync`, puis démarre `sidecar-gdrive-sync`. Suivre la première synchronisation avec `docker compose logs -f sidecar-gdrive-sync`, puis vérifier dans l'UI Paperless qu'un document déposé dans `controlled_chaos` apparaît automatiquement, OCR fait.
+
+## Consommation des fichiers .eml (courriers électroniques)
+
+Paperless-ngx ne sait pas nativement extraire le contenu d'un `.eml` : il délègue à **Tika** (extraction du message) et **Gotenberg** (rendu HTML → PDF). Sans ces deux services, un `.eml` déposé dans `consume/` échoue avec `Unsupported mime type message/rfc822`.
+
+- Deux services ajoutés à `compose.yaml` : `gotenberg` (`gotenberg/gotenberg:8.34`) et `tika` (`apache/tika:latest`), tous deux internes uniquement (jamais publiés sur l'hôte).
+- Côté `paperless` : `PAPERLESS_TIKA_ENABLED=true`, `PAPERLESS_TIKA_ENDPOINT=http://tika:9998`, `PAPERLESS_TIKA_GOTENBERG_ENDPOINT=http://gotenberg:3000`.
+- Pas de configuration supplémentaire côté `.env` : ces endpoints pointent sur les noms de service Docker Compose, internes au réseau `internal`.
+- Test : déposer un fichier `.eml` dans `consume/` (ou l'envoyer via `POST /api/documents/post_document/`) et vérifier qu'il apparaît comme document dans Paperless (converti en PDF, OCR fait) plutôt que de rester en échec dans `docker compose logs paperless`.
 
 ## Arrêt / nettoyage
 

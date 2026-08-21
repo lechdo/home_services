@@ -36,6 +36,8 @@ services:
     depends_on:
       - db
       - broker
+      - gotenberg
+      - tika
     environment:
       PAPERLESS_REDIS: redis://broker:6379
       PAPERLESS_DBHOST: db
@@ -51,6 +53,13 @@ services:
       PAPERLESS_ADMIN_USER: "${PAPERLESS_ADMIN_USER:-admin}"
       PAPERLESS_ADMIN_PASSWORD: "${PAPERLESS_ADMIN_PASSWORD}"
       PAPERLESS_ADMIN_MAIL: "${PAPERLESS_ADMIN_MAIL:-admin@example.com}"
+      # Consommation des fichiers .eml (courriers électroniques) déposés dans
+      # consume/ : Paperless-ngx délègue le rendu HTML->PDF à Gotenberg et
+      # l'extraction du message à Tika ; sans ces deux endpoints, un .eml
+      # échoue à la consommation ("Unsupported mime type message/rfc822").
+      PAPERLESS_TIKA_ENABLED: "true"
+      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
     volumes:
       - data:/usr/src/paperless/data
       - media:/usr/src/paperless/media
@@ -58,6 +67,27 @@ services:
       - ./consume:/usr/src/paperless/consume
     ports:
       - "192.168.1.109:8082:8000"
+    networks:
+      - internal
+
+  # gotenberg : rendu HTML/office -> PDF, utilisé par paperless (via Tika)
+  # pour convertir le corps d'un .eml en PDF avant OCR/indexation. Jamais
+  # exposé sur l'hôte : appelé uniquement par paperless sur le réseau interne.
+  gotenberg:
+    image: docker.io/gotenberg/gotenberg:8.34
+    restart: unless-stopped
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+    networks:
+      - internal
+
+  # tika : extraction du contenu des fichiers "Office" et des e-mails (.eml)
+  # pour le compte de paperless. Jamais exposé sur l'hôte.
+  tika:
+    image: docker.io/apache/tika:latest
+    restart: unless-stopped
     networks:
       - internal
 
