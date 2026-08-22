@@ -1,0 +1,9 @@
+flask==3.0.*
+bcrypt==4.2.*
+waitress==3.0.*
+# yt-dlp volontairement non figé à une version précise (contrairement aux
+# autres dépendances) : son schéma de version est daté (YYYY.MM.DD) et suit
+# les changements côté YouTube — figer une vieille version casserait les
+# téléchargements bien plus vite qu'une mise à jour de routine ne casserait
+# ce service.
+yt-dlp

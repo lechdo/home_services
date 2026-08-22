@@ -81,12 +81,28 @@ services:
   #   bloqué ~20s sur ce A record mort avant de basculer sur l'IPv6
   #   fonctionnelle.
   #   192.0.2.1 (TEST-NET-1, RFC 5737, plage documentaire jamais routée sur
-  #   Internet) fait échouer la tentative IPv4 rapidement (unreachable
-  #   renvoyé en amont) sans passer par une IP privée/loopback : une IP
-  #   privée (0.0.0.0, 127.0.0.1...) déclenche la protection anti-DNS-
+  #   Internet) était censé faire échouer la tentative IPv4 rapidement
+  #   (unreachable renvoyé en amont) sans passer par une IP privée/loopback :
+  #   une IP privée (0.0.0.0, 127.0.0.1...) déclenche la protection anti-DNS-
   #   rebinding de certains navigateurs, qui bloquent alors toute la
   #   connexion (constaté : "site inaccessible" avec 0.0.0.0, pire que le
-  #   problème initial).
+  #   problème initial). Fonctionne pour un navigateur (Happy Eyeballs :
+  #   IPv4/IPv6 essayés en parallèle, la lenteur/échec de l'un n'affecte pas
+  #   l'autre).
+  # - **Correction du 2026-08-17 (minecraft)** : un client Minecraft Java ne
+  #   fait PAS de Happy Eyeballs — un socket brut, qui essaie les adresses
+  #   résolues dans l'ordre. Testé réellement : une connexion TCP directe
+  #   vers 192.0.2.1 ne renvoie PAS toujours un "unreachable" rapide (constaté
+  #   depuis deux réseaux différents : accroché jusqu'au timeout complet,
+  #   ~8-20s+, avant tout basculement IPv6) — l'hypothèse initiale ne tenait
+  #   pas dans tous les cas. Pour un sous-domaine consommé par ce genre de
+  #   client (`DUCKDNS_SUBDOMAINS_V6ONLY`), la seule solution fiable est de
+  #   n'avoir AUCUN enregistrement A du tout : la résolution DNS ne renvoie
+  #   alors rien à essayer en IPv4, basculement IPv6 immédiat, sans dépendre
+  #   du comportement (variable selon les réseaux/FAI) d'une IPv4 "morte".
+  #   Obtenu en appelant l'API DuckDNS SANS le paramètre "ip" du tout (pas
+  #   juste vide) — le laisser présent, même vide, déclenche l'auto-détection
+  #   documentée par DuckDNS et recrée un A record indésirable.
   # - network_mode: host (plutôt que le réseau par défaut du projet) : le
   #   réseau bridge Docker ne fournit pas de connectivité IPv6 sortante aux
   #   conteneurs. Ce conteneur n'a besoin de parler qu'à des hôtes publics
@@ -99,36 +115,46 @@ services:
     network_mode: host
     environment:
       DUCKDNS_SUBDOMAINS: "${DUCKDNS_SUBDOMAINS}"
+      DUCKDNS_SUBDOMAINS_V6ONLY: "${DUCKDNS_SUBDOMAINS_V6ONLY:-}"
       DUCKDNS_TOKEN: "${DUCKDNS_TOKEN}"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
         apk add --no-cache curl >/dev/null
-        if [ -z "$${DUCKDNS_SUBDOMAINS}" ]; then
-          echo "DUCKDNS_SUBDOMAINS est vide, rien à mettre à jour." >&2
+        if [ -z "$${DUCKDNS_SUBDOMAINS}" ] && [ -z "$${DUCKDNS_SUBDOMAINS_V6ONLY}" ]; then
+          echo "DUCKDNS_SUBDOMAINS et DUCKDNS_SUBDOMAINS_V6ONLY sont vides, rien à mettre à jour." >&2
           exit 1
         fi
-        echo "sidecar-ddns démarré pour: $${DUCKDNS_SUBDOMAINS}"
+        echo "sidecar-ddns démarré pour: $${DUCKDNS_SUBDOMAINS} (A+AAAA) / $${DUCKDNS_SUBDOMAINS_V6ONLY} (AAAA seul)"
         while true; do
           IPV6=$$(curl -6 -fsS -m 10 https://api6.ipify.org || echo "")
           if [ -z "$$IPV6" ]; then
             echo "$$(date -u +%FT%TZ) impossible de déterminer l'IPv6 publique (pas de connectivité IPv6 sortante ?)" >&2
           else
-            RESPONSE=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS}&token=$${DUCKDNS_TOKEN}&ip=192.0.2.1&ipv6=$${IPV6}" || echo "ERROR")
-            # Le format exact de la réponse pour plusieurs domaines en une
-            # requête n'est pas documenté de façon certaine (validé "OK" pour
-            # un seul domaine sur bitwarden) : on se contente donc de détecter
-            # l'absence du marqueur d'échec "KO" plutôt qu'une égalité stricte.
-            # À revalider empiriquement en Phase 2 (voir _plan/plan.md).
-            case "$$RESPONSE" in
-              *KO*|ERROR)
-                echo "$$(date -u +%FT%TZ) échec mise à jour DuckDNS ($${DUCKDNS_SUBDOMAINS}): $$RESPONSE" >&2
-                ;;
-              *)
-                echo "$$(date -u +%FT%TZ) DuckDNS AAAA mis à jour ($${DUCKDNS_SUBDOMAINS}): $$IPV6 (réponse: $$RESPONSE)"
-                ;;
-            esac
+            if [ -n "$${DUCKDNS_SUBDOMAINS}" ]; then
+              RESPONSE=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS}&token=$${DUCKDNS_TOKEN}&ip=192.0.2.1&ipv6=$${IPV6}" || echo "ERROR")
+              case "$$RESPONSE" in
+                *KO*|ERROR)
+                  echo "$$(date -u +%FT%TZ) échec mise à jour DuckDNS ($${DUCKDNS_SUBDOMAINS}): $$RESPONSE" >&2
+                  ;;
+                *)
+                  echo "$$(date -u +%FT%TZ) DuckDNS AAAA mis à jour ($${DUCKDNS_SUBDOMAINS}): $$IPV6 (réponse: $$RESPONSE)"
+                  ;;
+              esac
+            fi
+            if [ -n "$${DUCKDNS_SUBDOMAINS_V6ONLY}" ]; then
+              # Pas de paramètre "ip" du tout ici (voir commentaire plus haut).
+              RESPONSE_V6=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS_V6ONLY}&token=$${DUCKDNS_TOKEN}&ipv6=$${IPV6}" || echo "ERROR")
+              case "$$RESPONSE_V6" in
+                *KO*|ERROR)
+                  echo "$$(date -u +%FT%TZ) échec mise à jour DuckDNS v6-only ($${DUCKDNS_SUBDOMAINS_V6ONLY}): $$RESPONSE_V6" >&2
+                  ;;
+                *)
+                  echo "$$(date -u +%FT%TZ) DuckDNS AAAA mis à jour, v6-only ($${DUCKDNS_SUBDOMAINS_V6ONLY}): $$IPV6 (réponse: $$RESPONSE_V6)"
+                  ;;
+              esac
+            fi
           fi
           sleep 300
         done

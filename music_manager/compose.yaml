@@ -1,0 +1,52 @@
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    restart: unless-stopped
+    ports:
+      # Bind sur l'IP LAN du second serveur physique (pas 127.0.0.1) : edge
+      # tourne sur une machine distincte (le Raspberry Pi) et doit joindre ce
+      # port via le réseau local — même pattern que paperless/actual-budget/
+      # minecraft (_plan/plan.md phase 0). Voir edge/_plan/architecture.md.
+      - "192.168.1.109:8087:4533"
+    environment:
+      # Servi sous https://music-jvince.duckdns.org/navidrome (voir
+      # _plan/plan.md phase 4) — Navidrome gère nativement ce sous-chemin,
+      # contrairement à "fetcher" (voir ProxyFix côté fetcher).
+      ND_BASEURL: "/navidrome"
+      # Filet de sécurité seulement : testé réellement (_plan/plan.md phase 2)
+      # que Navidrome détecte un fichier déposé par "fetcher" quasi
+      # instantanément via son watcher de système de fichiers intégré (log
+      # "Watcher: Triggering scan for changed folders" en quelques secondes),
+      # sans attendre cette échéance périodique.
+      ND_SCANSCHEDULE: "@every 1m"
+      ND_LOGLEVEL: "info"
+    volumes:
+      - navidrome_data:/data
+      # Lecture seule côté navidrome : seul "fetcher" écrit dans /music
+      # (_plan/plan.md, "un seul exemplaire du fichier audio").
+      - music:/music:ro
+
+  fetcher:
+    build: ./fetcher
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: "${FETCHER_SECRET_KEY}"
+      # true par défaut (accès prévu via https://music-jvince.duckdns.org/fetcher
+      # une fois edge branché) — mettre à false uniquement pour tester en
+      # HTTP direct avant l'intégration edge, voir fetcher/app.py.
+      COOKIE_SECURE: "${FETCHER_COOKIE_SECURE:-true}"
+    volumes:
+      # Lecture-écriture : seul composant qui écrit dans la bibliothèque
+      # partagée (musique téléchargée + fichier d'archive yt-dlp).
+      - music:/music
+      - fetcher_data:/app/data
+    ports:
+      - "192.168.1.109:8088:5000"
+
+volumes:
+  navidrome_data:
+  fetcher_data:
+  # Bibliothèque musicale partagée entre les deux composants de CE service —
+  # pas une ressource partagée entre deux services distincts, voir
+  # music_manager/CLAUDE.md.
+  music:

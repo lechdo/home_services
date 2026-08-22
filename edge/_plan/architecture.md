@@ -54,6 +54,7 @@ Une table de routage, propre à `edge`, qui associe :
 | `task-jvince.duckdns.org` (vikunja) | `127.0.0.1:8084` (Raspberry Pi, cf. `vikunja/_plan/plan.md` phase 3b) | oui (DuckDNS + Let's Encrypt) — bascule depuis le mode local le 2026-08-14, voir ci-dessous | non |
 | `budget.home.test` (actual-budget) | `192.168.1.109:8083` (second serveur physique, migré le 2026-08-14, cf. `plan.md` phase 10) | oui — **auto-signé**, pas Let's Encrypt (voir ci-dessous) | non |
 | `minecraft-jvince.duckdns.org` (panel minecraft) | `192.168.1.109:8086` (second serveur physique, cf. `plan.md` phase 12) | oui (DuckDNS + Let's Encrypt) | non |
+| `music-jvince.duckdns.org` (music_manager : navidrome sous `/navidrome`, fetcher sous `/fetcher`) | `192.168.1.109:8087` (navidrome) et `192.168.1.109:8088` (fetcher) — second serveur physique, comme paperless/actual-budget/minecraft — **un seul `server{}`, deux `location{}`**, voir cas particulier ci-dessous | oui (DuckDNS + Let's Encrypt) | non |
 
 Note : `edge/compose.yaml` tourne en `network_mode: host` (voir Phase 4 de `plan.md`), donc l'upstream est bien `127.0.0.1:PORT` et non `host.docker.internal:PORT` — cette dernière forme a été essayée puis abandonnée (502 systématique, un port publié en `127.0.0.1` n'étant pas joignable depuis un réseau bridge Docker).
 
@@ -79,6 +80,14 @@ Le contrat d'intégration ci-dessus suppose implicitement que le trafic à route
 - Aucune terminaison TLS sur ce port (le protocole du jeu n'en a pas la notion) et aucune page d'erreur possible si le backend ne répond pas (pas de HTTP à ce niveau) — un client Minecraft dont le serveur est éteint voit un échec de connexion natif, pas une page personnalisée.
 - Le contrat d'intégration côté backend reste le même dans l'esprit (publier un port sur l'hôte, edge route sans que le backend ne le sache) — seule la couche de transport change (L4 au lieu de L7).
 - Le panel web de gestion de ce même service (démarrer/arrêter le serveur, changer de map), lui, reste un service HTTP tout à fait standard et suit le contrat habituel (table de routage ci-dessus) — un même service backend peut donc avoir une entrée dans `conf.d/` **et** une entrée dans `stream.d/`, chacune pour un port distinct.
+
+## Cas particulier : un service qui a besoin d'un routage par chemin (music_manager)
+
+Le contrat d'intégration ci-dessus suppose implicitement qu'un sous-domaine correspond à un seul service backend (« un sous-domaine par service backend, jamais de routage par chemin sous un même nom », `edge/CLAUDE.md`). Depuis `music_manager` (2026-08-22), un service peut avoir **deux composants internes** (navidrome + fetcher) exposés tous les deux en HTTP, sans que cela justifie deux sous-domaines : ce ne sont pas deux services distincts au sens du `CLAUDE.md` racine, mais deux parties d'un seul (voir `music_manager/CLAUDE.md`).
+
+- Un seul `server{}` (`nginx/conf.d/music.conf`) pour `music-jvince.duckdns.org`, avec **deux `location{}`** (`/navidrome/`, `/fetcher/`) plutôt qu'un `server_name` par composant — la seule exception de ce type dans ce dépôt à ce jour.
+- Le contrat d'intégration côté backend reste identique pour chaque composant (chacun publie son propre port HTTP sur l'hôte) — seule la table de routage d'edge regroupe les deux ports sous un seul sous-domaine.
+- Un souci propre à ce cas, absent des services à sous-domaine unique : le composant `fetcher` (Flask) n'a pas de notion native de sous-chemin public et a besoin que `location /fetcher/` lui transmette l'en-tête `X-Forwarded-Prefix: /fetcher` (lu côté backend via `ProxyFix`, voir `music_manager/_plan/plan.md` phase 3) pour générer des liens/redirections corrects — `navidrome`, lui, gère nativement son sous-chemin (`ND_BASEURL`) et n'a besoin d'aucun en-tête supplémentaire.
 
 ## DDNS et ACME centralisés : pourquoi c'est correct de mutualiser ici
 

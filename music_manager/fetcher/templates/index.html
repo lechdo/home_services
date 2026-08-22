@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Fetcher musique</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      display: flex;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 2rem 1rem;
+      box-sizing: border-box;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 42rem;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    }
+    h1 { font-size: 1.3rem; margin-top: 0; }
+    h2 { font-size: 1rem; margin: 1.75rem 0 1rem; border-top: 1px solid #eee; padding-top: 1.25rem; }
+    label { display: block; margin-top: 1rem; font-size: 0.9rem; color: #444; }
+    textarea {
+      width: 100%;
+      padding: 0.5rem;
+      margin-top: 0.25rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-sizing: border-box;
+      font: inherit;
+      resize: vertical;
+    }
+    button {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 0.6rem;
+      border: none;
+      border-radius: 6px;
+      background: #2e7d32;
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    .flash { color: #1565c0; margin-top: 1rem; font-size: 0.9rem; }
+    .logout { display: block; margin-top: 1.5rem; text-align: right; font-size: 0.85rem; }
+    .hint { font-size: 0.8rem; color: #777; margin-top: 0.25rem; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.4rem 0.3rem; border-bottom: 1px solid #eee; vertical-align: top; }
+    td.url { word-break: break-all; max-width: 16rem; }
+    .empty { color: #888; font-size: 0.85rem; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      color: #fff;
+      white-space: nowrap;
+    }
+    .badge.queued { background: #888; }
+    .badge.running { background: #f9a825; }
+    .badge.done { background: #2e7d32; }
+    .badge.skipped { background: #455a64; }
+    .badge.error { background: #c62828; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Fetcher musique</h1>
+    <form method="post" action="{{ url_for('submit') }}">
+      <label for="urls">URLs YouTube (une par ligne — vidéo unique ou playlist)</label>
+      <textarea id="urls" name="urls" rows="5" required placeholder="https://www.youtube.com/watch?v=...&#10;https://www.youtube.com/playlist?list=..."></textarea>
+      <p class="hint">Une vidéo déjà présente dans la bibliothèque n'est pas retéléchargée.</p>
+      <button type="submit">Télécharger</button>
+    </form>
+    {% for message in get_flashed_messages() %}
+      <p class="flash">{{ message }}</p>
+    {% endfor %}
+
+    <h2>Téléchargements</h2>
+    <div id="jobs"><p class="empty">Chargement…</p></div>
+
+    <a class="logout" href="{{ url_for('logout') }}">Se déconnecter ({{ username }})</a>
+  </div>
+
+  <script>
+    const STATE_LABELS = {
+      queued: "en attente",
+      running: "en cours",
+      done: "terminé",
+      skipped: "déjà présent",
+      error: "erreur",
+    };
+
+    function formatDate(ts) {
+      return new Date(ts * 1000).toLocaleString();
+    }
+
+    function renderJobs(jobs) {
+      const container = document.getElementById("jobs");
+      if (!jobs.length) {
+        container.innerHTML = '<p class="empty">Aucun téléchargement pour l\'instant.</p>';
+        return;
+      }
+
+      let html = "";
+      for (const job of jobs) {
+        html += `<p class="hint">${formatDate(job.created)} — soumis par ${job.submitted_by}</p>`;
+        html += "<table><tbody>";
+        for (const line of job.lines) {
+          const badge = `<span class="badge ${line.state}">${STATE_LABELS[line.state] || line.state}</span>`;
+          const message = line.message ? line.message : "";
+          html += `<tr><td class="url">${line.url}</td><td>${badge}</td><td>${message}</td></tr>`;
+        }
+        html += "</tbody></table>";
+      }
+      container.innerHTML = html;
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch("{{ url_for('status_json') }}");
+        if (!response.ok) return;
+        renderJobs(await response.json());
+      } catch (e) {
+        // best-effort : un échec de poll isolé ne doit rien casser à l'affichage courant
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 3000);
+  </script>
+</body>
+</html>
