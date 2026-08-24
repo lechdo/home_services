@@ -60,6 +60,28 @@ services:
       PAPERLESS_TIKA_ENABLED: "true"
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
       PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
+      # SSO applicatif via authentik (authentik/_plan/plan.md phase 6). Le
+      # compte authentik "julien" a été lié en base au compte "Julien"
+      # existant (superuser) — /accounts/3rdparty/ n'existant pas dans cette
+      # version de paperless-ngx, la liaison a dû se faire manuellement
+      # (créer un compte temporaire via OIDC, réassigner son SocialAccount
+      # au compte admin existant, supprimer le temporaire). Validé
+      # réellement (2026-08-24) avant de couper le login local ci-dessous.
+      PAPERLESS_APPS: allauth.socialaccount.providers.openid_connect
+      PAPERLESS_SOCIALACCOUNT_PROVIDERS: >-
+        {"openid_connect": {"APPS": [{"provider_id": "authentik", "name":
+        "authentik", "client_id": "paperless", "secret":
+        "${PAPERLESS_OIDC_CLIENT_SECRET}", "settings": {"server_url":
+        "https://auth.jvince.dynv6.net/application/o/paperless/.well-known/openid-configuration"}}]}}
+      # Bascule finale (2026-08-24, décision explicite de l'utilisateur,
+      # même schéma que vikunja) : login local désactivé, redirection
+      # automatique vers authentik dès l'écran de login (pas de bouton à
+      # cliquer) — cohérent avec le retrait du portail générique (forward-
+      # auth) côté edge, devenu redondant ET responsable d'un blocage CORS
+      # sur le manifest PWA (requête sans cookie, interceptée par le
+      # portail avant d'atteindre paperless).
+      PAPERLESS_DISABLE_REGULAR_LOGIN: "true"
+      PAPERLESS_REDIRECT_LOGIN_TO_SSO: "true"
     volumes:
       - data:/usr/src/paperless/data
       - media:/usr/src/paperless/media
@@ -69,6 +91,16 @@ services:
       - "192.168.1.109:8082:8000"
     networks:
       - internal
+    extra_hosts:
+      # Même bug que vikunja (authentik/_plan/plan.md phase 6, 2026-08-23) :
+      # ce conteneur, sur un réseau bridge Docker sans IPv6 sortant, ne peut
+      # pas joindre auth.jvince.dynv6.net publiquement ("Network is
+      # unreachable" constaté réellement, erreur 500 sur /accounts/oidc/...).
+      # Résolu directement vers edge (le Pi, qui gère le TLS pour ce nom) —
+      # jamais "host-gateway" (piège confirmé sur vikunja : résout vers la
+      # passerelle du réseau bridge Docker PAR DÉFAUT, pas celle du réseau
+      # personnalisé réellement utilisé par ce conteneur).
+      - "auth.jvince.dynv6.net:192.168.1.99"
 
   # gotenberg : rendu HTML/office -> PDF, utilisé par paperless (via Tika)
   # pour convertir le corps d'un .eml en PDF avant OCR/indexation. Jamais

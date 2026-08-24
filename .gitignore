@@ -1,0 +1,4 @@
+.env
+# Contient un vrai token OAuth Google Drive (paperless) — jamais committé,
+# même règle que .env. Le gabarit sûr est rclone.conf.example.
+rclone.conf

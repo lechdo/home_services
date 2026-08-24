@@ -172,6 +172,23 @@
       </button>
     </form>
 
+    <h2>Accès autorisés (whitelist)</h2>
+    {% for name in whitelist %}
+      <form method="post" action="{{ url_for('remove_whitelist_route') }}" class="plugin-row">
+        <input type="hidden" name="username" value="{{ name }}">
+        <span style="flex: 1">{{ name }}</span>
+        <button type="submit">Retirer</button>
+      </form>
+    {% else %}
+      <p class="status">Personne n'est encore autorisé — le serveur refusera toute connexion tant que la liste est vide.</p>
+    {% endfor %}
+    <form method="post" action="{{ url_for('add_whitelist_route') }}">
+      <label for="username">Ajouter un pseudo (compte Mojang/Microsoft)</label>
+      <input type="text" id="username" name="username" pattern="[A-Za-z0-9_]{3,16}" required
+             placeholder="ex. Steve123">
+      <button type="submit" class="create">Autoriser</button>
+    </form>
+
     <h2>Nouvelle map</h2>
     <form method="post" action="{{ url_for('create_map_route') }}">
       <label for="name">Nom (devient le nom du dossier)</label>

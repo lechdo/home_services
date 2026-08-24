@@ -1,0 +1,145 @@
+services:
+  # Conteneur ponctuel : initialise la propriété des volumes avant le tout
+  # premier démarrage. L'image officielle vikunja/vikunja tourne en uid 1000
+  # non-root et n'effectue elle-même aucun chown au démarrage — sans cette
+  # étape, l'écriture dans /db (base SQLite) et /app/vikunja/files (pièces
+  # jointes) échoue silencieusement au premier lancement (doc officielle :
+  # https://vikunja.io/docs/docker-walkthrough/). Ne tourne jamais en continu :
+  #   docker compose --profile init run --rm vikunja-init
+  vikunja-init:
+    image: alpine:3.20
+    profiles: ["init"]
+    volumes:
+      - data:/db
+      - files:/app/vikunja/files
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        chown -R 1000:1000 /db /app/vikunja/files
+        echo "Permissions initialisées (uid 1000) pour /db et /app/vikunja/files."
+
+  # vikunja : image officielle mono-conteneur (depuis v0.22, API Go +
+  # frontend statique servis par le même binaire — pas la variante historique
+  # api+frontend séparée). Ne termine jamais le TLS et ne gère aucun DNS :
+  # exposition déléguée au service `edge` (CLAUDE.md racine, "Exposition
+  # Internet"), en mode local uniquement pour l'instant (_plan/plan.md
+  # phase 3).
+  vikunja:
+    image: vikunja/vikunja
+    restart: unless-stopped
+    environment:
+      # Secret de signature JWT/crypto — variable actuelle recommandée par
+      # Vikunja (VIKUNJA_SERVICE_JWTSECRET existe encore mais est dépréciée,
+      # cf. _plan/plan.md phase 1). Doit être fixe : sans elle, un secret
+      # aléatoire est tiré à chaque démarrage et invalide toutes les sessions
+      # ouvertes au moindre redémarrage/mise à jour du conteneur.
+      VIKUNJA_SERVICE_SECRET: "${VIKUNJA_SERVICE_SECRET}"
+      # URL publique exacte par laquelle les utilisateurs atteignent le
+      # service — réutilisée dans les emails et pour la vérification
+      # d'origine (CORS, calculé par vikunja à partir de cette seule valeur).
+      # Migration DuckDNS -> dynv6 (edge/_plan/plan.md phase 15, 2026-08-23) :
+      # bascule vers le nouveau sous-domaine — erreur CORS réelle constatée
+      # dans le navigateur avant ce changement (le frontend chargeait déjà
+      # depuis task.jvince.dynv6.net, mais le backend n'autorisait l'origine
+      # que de l'ancien domaine DuckDNS). L'ancien sous-domaine DuckDNS
+      # cessera de fonctionner pour les appels API à partir de ce changement
+      # (attendu, voué à disparaître de toute façon).
+      VIKUNJA_SERVICE_PUBLICURL: "https://task.jvince.dynv6.net/"
+      # Défaut GMT sinon : échéances/rappels afficheraient une heure fausse.
+      VIKUNJA_SERVICE_TIMEZONE: "Europe/Paris"
+      # Inscription libre désactivée (2026-08-14, décision explicite) : les
+      # deux comptes du foyer sont déjà créés, service exposé publiquement
+      # (task-jvince.duckdns.org) — pas de raison de laisser n'importe qui
+      # avec l'URL créer un compte. Un compte existant peut toujours inviter
+      # via le partage de projet ; création manuelle d'un nouveau compte par
+      # un admin encore possible en CLI si besoin (`docker compose exec
+      # vikunja ./vikunja user create ...`).
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "false"
+      # SMTP obligatoire dès la mise en service ici (pas une amélioration
+      # différée) : sans mailer actif, ni les rappels de tâches ni la
+      # réinitialisation de mot de passe ne fonctionnent, sans dégradation
+      # silencieuse (_plan/plan.md phase 2). Fournisseur retenu : Brevo
+      # (transactionnel, n'expose pas de compte email personnel) — host/port
+      # non secrets, laissés en clair ; identifiants dans .env.
+      VIKUNJA_MAILER_ENABLED: "true"
+      VIKUNJA_MAILER_HOST: "smtp-relay.brevo.com"
+      VIKUNJA_MAILER_PORT: "587"
+      VIKUNJA_MAILER_AUTHTYPE: "login"
+      VIKUNJA_MAILER_USERNAME: "${VIKUNJA_MAILER_USERNAME}"
+      VIKUNJA_MAILER_PASSWORD: "${VIKUNJA_MAILER_PASSWORD}"
+      VIKUNJA_MAILER_FROMEMAIL: "${VIKUNJA_MAILER_FROMEMAIL}"
+      VIKUNJA_MAILER_FORCESSL: "false"
+      VIKUNJA_MAILER_SKIPTLSVERIFY: "false"
+      # SSO applicatif via authentik (authentik/_plan/plan.md phase 6) — en
+      # plus du login local (VIKUNJA_AUTH_LOCAL_ENABLED reste à sa valeur par
+      # défaut, true : les deux comptes existants du foyer restent utilisables
+      # tels quels, l'OIDC s'ajoute plutôt qu'il ne remplace). Le nom "authentik"
+      # ci-dessous détermine l'URL de callback attendue par vikunja
+      # (VIKUNJA_AUTH_OPENID_REDIRECTURL + ce nom en minuscules) — doit
+      # correspondre exactement au redirect_uri enregistré côté authentik
+      # (authentik/provisioning/oidc-vikunja.yaml).
+      VIKUNJA_AUTH_OPENID_ENABLED: "true"
+      VIKUNJA_AUTH_OPENID_REDIRECTURL: "https://task.jvince.dynv6.net/auth/openid/"
+      VIKUNJA_AUTH_OPENID_PROVIDERS_0_NAME: "authentik"
+      VIKUNJA_AUTH_OPENID_PROVIDERS_0_AUTHURL: "https://auth.jvince.dynv6.net/application/o/vikunja/"
+      VIKUNJA_AUTH_OPENID_PROVIDERS_0_CLIENTID: "vikunja"
+      VIKUNJA_AUTH_OPENID_PROVIDERS_0_CLIENTSECRET: "${VIKUNJA_AUTH_OPENID_PROVIDERS_0_CLIENTSECRET}"
+      VIKUNJA_AUTH_OPENID_PROVIDERS_0_SCOPE: "openid email profile"
+      # Décision explicite de l'utilisateur (2026-08-23, authentik/_plan/plan.md
+      # phase 6) : bascule complète sur OIDC, login local désactivé — avec un
+      # seul provider et pas d'alternative locale, le frontend vikunja
+      # redirige automatiquement vers authentik plutôt que d'afficher son
+      # propre écran de login (plus de clic manuel "Connect with authentik").
+      # Concerne aussi le second compte du foyer : chaque personne a besoin
+      # d'un compte authentik désormais pour se connecter à vikunja.
+      VIKUNJA_AUTH_LOCAL_ENABLED: "false"
+    volumes:
+      # Deux volumes nommés distincts (pas un seul) : l'image officielle
+      # préconfigure VIKUNJA_DATABASE_PATH=/db/vikunja.db et
+      # VIKUNJA_SERVICE_ROOTPATH=/app/vikunja/ (donc files sous
+      # /app/vikunja/files) — on suit ces chemins par défaut tels quels
+      # plutôt que de les réécrire vers un point de montage unique, pour
+      # rester au plus près du comportement documenté/testé par l'éditeur
+      # (moins de risque qu'un override mal placé écrive hors des volumes
+      # montés). Les deux restent nommés, donc adressables individuellement
+      # par un futur sidecar-backup (_plan/plan.md phase 5).
+      - data:/db
+      - files:/app/vikunja/files
+    ports:
+      # Local uniquement pour l'instant (_plan/plan.md phase 3) : pas
+      # d'exposition Internet tant qu'un besoin d'accès hors domicile n'est
+      # pas confirmé.
+      - "127.0.0.1:8084:3456"
+    networks:
+      - internal
+    extra_hosts:
+      # Bug réel découvert en testant l'OIDC (authentik/_plan/plan.md phase
+      # 6, 2026-08-23) : ce conteneur est sur un réseau bridge Docker SANS
+      # IPv6 sortant (contrairement à edge, qui tourne en network_mode: host)
+      # — la résolution publique de auth.jvince.dynv6.net renvoie un A
+      # factice (192.0.2.1, cf. edge/compose.yaml) en plus du vrai AAAA, et
+      # ce conteneur ne peut essayer QUE l'IPv4, donc échoue systématiquement
+      # (timeout ~90s) au lieu de basculer sur l'IPv6 réelle comme le ferait
+      # un navigateur (Happy Eyeballs) — même famille de bug que la Phase 13
+      # (minecraft), cause différente (pas de bascule possible du tout ici,
+      # plutôt qu'un délai). Contournement : résoudre ce nom directement vers
+      # edge (même machine, joignable via son IP LAN) plutôt que vers
+      # Internet, pour un échange qui reste de toute façon local au foyer. Le
+      # certificat TLS reste validé normalement (vérifié sur le nom, pas l'IP).
+      #
+      # "host-gateway" essayé en premier et abandonné (constaté réellement,
+      # même jour) : il résout vers la passerelle du réseau bridge Docker PAR
+      # DÉFAUT (docker0, 172.17.0.1), pas celle du réseau "internal" propre à
+      # ce service (172.22.0.1) — injoignable depuis ce conteneur, donc même
+      # timeout qu'avant. L'IP LAN réelle du Pi ci-dessous est stable
+      # (réservation DHCP comme les autres machines de ce dépôt) et ne dépend
+      # d'aucune subtilité interne à Docker.
+      - "auth.jvince.dynv6.net:192.168.1.99"
+
+networks:
+  internal:
+
+volumes:
+  data:
+  files:

@@ -43,6 +43,11 @@ services:
       # edge) — repasser à true (ou retirer la ligne dans .env) une fois
       # servi en HTTPS via https://minecraft-jvince.duckdns.org.
       COOKIE_SECURE: "${PANEL_COOKIE_SECURE:-true}"
+      # SSO via authentik (authentik/_plan/plan.md phase 6) : IP LAN d'edge,
+      # seule source de confiance pour l'en-tête X-Authentik-Username (voir
+      # try_trusted_header_login() dans app.py) — défaut déjà correct
+      # (edge tourne sur le Pi), explicite ici pour la lisibilité.
+      TRUSTED_PROXY_IP: "${TRUSTED_PROXY_IP:-192.168.1.99}"
     volumes:
       # Lecture-écriture : le panel crée les dossiers de nouvelles maps
       # (bouton dédié) et y copie les plugins activés (dossier plugins/ de

@@ -1,0 +1,13 @@
+{
+  "name": "actual-budget-rules",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Outil réutilisable pour créer les règles de catégorisation Actual Budget à partir d'un fichier de règles déclaratif. Voir README.md.",
+  "main": "apply-rules.js",
+  "scripts": {
+    "apply": "node apply-rules.js"
+  },
+  "dependencies": {
+    "@actual-app/api": "^26.8.1"
+  }
+}

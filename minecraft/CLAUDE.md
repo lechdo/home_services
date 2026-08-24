@@ -41,8 +41,9 @@ Le panel permet aussi de créer une nouvelle map (nom validé, devient le nom du
 - **Thizzy'z Tree Feller** (couper un arbre entier d'un coup).
 - **VeinMiner** (miner un filon de minerai entier d'un coup).
 - **EssentialsX** (`/home`, `/tpa`, `/kit`, `/warp` — confort multijoueur de base).
+- **Sleeper** (pourcentage de joueurs endormis nécessaire pour passer la nuit, avec vote et messages configurables — successeur actif choisi plutôt que le simple game rule vanilla `playersSleepingPercentage` pour le vote et les messages en jeu).
 
-Catalogue volontairement restreint à ces deux besoins exprimés — pas de marketplace générique. Les jars sont récupérés à la demande via l'API Modrinth (toujours la dernière version compatible Paper, jamais d'URL de jar figée à maintenir à la main), mis en cache une fois (`panel-data/plugin-cache/`) puis copiés dans `maps/<nom>/plugins/` de la map concernée à l'activation. Ces trois réglages (map, difficulté, plugins) ne sont modifiables que serveur arrêté.
+Catalogue volontairement restreint à ces besoins exprimés — pas de marketplace générique. Les jars sont récupérés à la demande via l'API Modrinth (toujours la dernière version compatible Paper, jamais d'URL de jar figée à maintenir à la main), mis en cache une fois (`panel-data/plugin-cache/`) puis copiés dans `maps/<nom>/plugins/` de la map concernée à l'activation. Ces trois réglages (map, difficulté, plugins) ne sont modifiables que serveur arrêté.
 
 ## Minuteur de session et notifications in-game (RCON)
 
@@ -70,6 +71,15 @@ Le tableau de bord affiche un gif (parmi plusieurs disponibles sous `panel/stati
 ## Authentification du panel
 
 Mini-application avec vrais comptes (pas de Basic Auth au niveau d'edge) : sessions, mots de passe hashés (bcrypt), ~10 comptes créés à la main (pas d'auto-inscription, même logique que vikunja). Décision du 2026-08-17, motivée par une meilleure UX qu'un popup Basic Auth et par la traçabilité (savoir qui a démarré/arrêté le serveur).
+
+## Accès au serveur de jeu : whitelist + authentification Mojang/Microsoft
+
+À ne pas confondre avec l'authentification du panel (section précédente) : ceci contrôle qui peut rejoindre la **partie**, pas qui peut piloter le serveur. Décision du 2026-08-18, besoin exprimé : n'autoriser que des personnes identifiées, avec une vérification qui ne se limite pas à un pseudo ou une adresse IP déclarés (facilement usurpables).
+
+- `ONLINE_MODE=true` (déjà la valeur par défaut de l'image `itzg/minecraft-server`, fixée explicitement dans `start_server()` pour ne pas dépendre d'un défaut implicite) : à la connexion, Minecraft vérifie auprès des serveurs Mojang/Microsoft que le client possède réellement le compte correspondant au pseudo annoncé. C'est ce qui empêche qu'un pseudo déjà utilisé par quelqu'un d'autre serve à se faire passer pour lui — un filtrage par pseudo ou IP déclarés ne vérifie rien de tel.
+- `ENFORCE_WHITELIST=true` + `WHITELIST=<pseudos>` : accès restreint à une liste de comptes connus (~10 personnes), gérée depuis le panel (section « Accès autorisés »), jamais à la main dans un fichier `.env` ou `whitelist.json`. Liste canonique persistée dans `panel-data/state.json` (`whitelist`), commune à toutes les maps (ce n'est pas un réglage par map).
+- Contrairement à map/difficulté/plugins, la whitelist est modifiable **même serveur en cours d'exécution** : l'ajout/retrait est alors appliqué immédiatement via RCON (`whitelist add/remove`, best-effort), en plus d'être persisté pour les démarrages suivants (variable d'environnement `WHITELIST` recalculée à chaque `start_server()`, avec recréation du conteneur si elle a changé depuis la dernière création — même logique que le contrôle déjà en place pour la difficulté).
+- Pas de second facteur applicatif (mot de passe en jeu, plugin de login) : jugé redondant, la vérification cryptographique Mojang/Microsoft couvrant déjà le risque identifié (usurpation de pseudo). À reconsidérer seulement si un besoin distinct apparaît (ex. compte partagé en famille sans MFA côté Microsoft).
 
 ## À lire avant de travailler sur ce service
 

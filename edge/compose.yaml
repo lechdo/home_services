@@ -23,6 +23,10 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/stream.d:/etc/nginx/stream.d:ro
       - ./nginx/error-pages:/etc/nginx/error-pages:ro
+      # Snippets réutilisables inclus par certains conf.d/*.conf (pattern
+      # forward-auth authentik, authentik/_plan/plan.md phase 3) — un seul
+      # exemplaire de la logique, pas un copier-coller par service protégé.
+      - ./nginx/snippets:/etc/nginx/snippets:ro
       - certs:/etc/nginx/certs:ro
     # Reload périodique : nginx ne relit jamais un certificat déjà chargé sans
     # signal explicite. sidecar-acme n'a aucun moyen d'atteindre ce conteneur
@@ -42,118 +46,122 @@ services:
         exec nginx -g 'daemon off;'
 
   # sidecar-acme : obtient/renouvelle les certificats Let's Encrypt via
-  # challenge DNS-01 (fournisseur DuckDNS), un par sous-domaine. `command:
-  # daemon` exécute le cron interne d'acme.sh (vérification quotidienne,
-  # renouvellement si <30j de validité restante, puis ré-exécution automatique
-  # de l'action --install-cert enregistrée lors de l'émission initiale).
-  # L'émission initiale de chaque sous-domaine se fait manuellement une fois,
-  # voir README.md.
+  # challenge DNS-01 (dynv6, seul fournisseur depuis le retrait de DuckDNS —
+  # edge/_plan/plan.md phase 15, migration terminée 2026-08-24), un par
+  # sous-domaine. `command: daemon` exécute le cron interne d'acme.sh
+  # (vérification quotidienne, renouvellement si <30j de validité restante,
+  # puis ré-exécution automatique de l'action --install-cert enregistrée
+  # lors de l'émission initiale). L'émission initiale de chaque sous-domaine
+  # se fait manuellement une fois (--dns dns_dynv6), voir README.md.
   sidecar-acme:
     image: neilpang/acme.sh:latest
-    profiles: ["duckdns"]
+    profiles: ["dynv6"]
     restart: unless-stopped
     environment:
-      DuckDNS_Token: "${DUCKDNS_TOKEN}"
+      DYNV6_TOKEN: "${DYNV6_TOKEN}"
     volumes:
       - acme_state:/acme.sh
       - certs:/certs
     command: daemon
 
-  # sidecar-ddns : maintient à jour l'enregistrement AAAA DuckDNS de TOUS les
-  # sous-domaines enregistrés (DUCKDNS_SUBDOMAINS, séparés par des virgules)
-  # avec l'IPv6 publique courante, en une seule requête — tous ces
-  # sous-domaines pointent vers la même IP (même réseau domestique), pas besoin
-  # d'un sidecar par service (cf. _plan/architecture.md).
+  # sidecar-ddns-dynv6 : équivalent dynv6 de sidecar-ddns ci-dessus, cf.
+  # _plan/plan.md phase 15 (migration DuckDNS -> dynv6, coexistence pendant
+  # la transition via un profil Compose séparé, "dynv6").
   #
-  # Repris de bitwarden/compose.yaml, où deux points ont été découverts en
-  # testant réellement en conditions réelles :
-  # - www.duckdns.org n'a pas d'enregistrement AAAA (API joignable qu'en
-  #   IPv4) : impossible de compter sur l'auto-détection DuckDNS habituelle.
-  #   On détermine nous-mêmes l'IPv6 publique via un service dual-stack
-  #   (api6.ipify.org).
-  # - ip=192.0.2.1 explicite dans l'appel update : sans ce paramètre, DuckDNS
-  #   auto-détecte l'IPv4 de la requête entrante (forcément en IPv4 vu le
-  #   point précédent) et crée un A record avec l'IPv4 CGNAT de la box —
-  #   adresse qui a l'air valide mais qui timeout silencieusement (aucun
-  #   port-forward IPv4 n'existe, seul le pare-feu IPv6 est ouvert, cf.
-  #   deploiement-raspberry.md). Un client dont la pile réseau essaie l'IPv4
-  #   avant l'IPv6 (constaté sur Windows, pas sur Android/Linux) reste alors
-  #   bloqué ~20s sur ce A record mort avant de basculer sur l'IPv6
-  #   fonctionnelle.
-  #   192.0.2.1 (TEST-NET-1, RFC 5737, plage documentaire jamais routée sur
-  #   Internet) était censé faire échouer la tentative IPv4 rapidement
-  #   (unreachable renvoyé en amont) sans passer par une IP privée/loopback :
-  #   une IP privée (0.0.0.0, 127.0.0.1...) déclenche la protection anti-DNS-
-  #   rebinding de certains navigateurs, qui bloquent alors toute la
-  #   connexion (constaté : "site inaccessible" avec 0.0.0.0, pire que le
-  #   problème initial). Fonctionne pour un navigateur (Happy Eyeballs :
-  #   IPv4/IPv6 essayés en parallèle, la lenteur/échec de l'un n'affecte pas
-  #   l'autre).
-  # - **Correction du 2026-08-17 (minecraft)** : un client Minecraft Java ne
-  #   fait PAS de Happy Eyeballs — un socket brut, qui essaie les adresses
-  #   résolues dans l'ordre. Testé réellement : une connexion TCP directe
-  #   vers 192.0.2.1 ne renvoie PAS toujours un "unreachable" rapide (constaté
-  #   depuis deux réseaux différents : accroché jusqu'au timeout complet,
-  #   ~8-20s+, avant tout basculement IPv6) — l'hypothèse initiale ne tenait
-  #   pas dans tous les cas. Pour un sous-domaine consommé par ce genre de
-  #   client (`DUCKDNS_SUBDOMAINS_V6ONLY`), la seule solution fiable est de
-  #   n'avoir AUCUN enregistrement A du tout : la résolution DNS ne renvoie
-  #   alors rien à essayer en IPv4, basculement IPv6 immédiat, sans dépendre
-  #   du comportement (variable selon les réseaux/FAI) d'une IPv4 "morte".
-  #   Obtenu en appelant l'API DuckDNS SANS le paramètre "ip" du tout (pas
-  #   juste vide) — le laisser présent, même vide, déclenche l'auto-détection
-  #   documentée par DuckDNS et recrée un A record indésirable.
-  # - network_mode: host (plutôt que le réseau par défaut du projet) : le
-  #   réseau bridge Docker ne fournit pas de connectivité IPv6 sortante aux
-  #   conteneurs. Ce conteneur n'a besoin de parler qu'à des hôtes publics
-  #   (api6.ipify.org, www.duckdns.org) et doit voir l'IPv6 réelle de la
-  #   machine hôte.
-  sidecar-ddns:
+  # Découverte réelle (2026-08-23), en deux temps :
+  # 1) L'interface dynv6 génère systématiquement un nom cible distinct par
+  #    service ajouté (ex. "vault" -> CNAME vers "vaultwarden.jvince.dynv6.net")
+  #    plutôt que de permettre facilement un CNAME vers un enregistrement déjà
+  #    existant — schéma "un enregistrement par service" adopté plutôt que de
+  #    lutter contre l'UI (chaque nom court, "vault"/"task"/etc., n'est qu'un
+  #    CNAME statique créé une fois pour toutes dans l'UI, jamais touché ici).
+  # 2) L'endpoint simplifié "/api/update?hostname=..." (utilisé par
+  #    sidecar-ddns pour DuckDNS, tenté ici par analogie) ne fonctionne QUE
+  #    pour l'adresse propre de la zone elle-même (son "nom de zone",
+  #    jvince.dynv6.net) — HTTP 404 sur tout autre enregistrement, MÊME s'il
+  #    existe réellement (vérifié : un enregistrement créé dans l'UI, visible
+  #    en DNS public, renvoie quand même 404 via cet endpoint). Le même token
+  #    fonctionne en revanche pleinement via l'API REST v2 de dynv6 (Bearer
+  #    token, GET/PATCH par ID d'enregistrement) — c'est ce qu'utilise en
+  #    réalité le plugin dns_dynv6 d'acme.sh sous le capot, ce qui explique
+  #    pourquoi le test ACME a réussi alors que l'endpoint simplifié échouait
+  #    pour les mêmes noms. Ce sidecar utilise donc l'API REST v2 : une
+  #    requête GET liste tous les enregistrements de la zone (avec leur ID),
+  #    puis un PATCH par ID met à jour le contenu.
+  #
+  # DYNV6_HOSTNAMES / DYNV6_HOSTNAMES_V6ONLY : listes de noms COURTS (pas de
+  # FQDN, ex. "vaultwarden", pas "vaultwarden.jvince.dynv6.net" — c'est le
+  # champ "name" tel que renvoyé par l'API), décalque de DUCKDNS_SUBDOMAINS /
+  # DUCKDNS_SUBDOMAINS_V6ONLY :
+  # - DYNV6_HOSTNAMES : A factice (192.0.2.1) + AAAA réel, pour les services
+  #   consommés par un client avec bascule IPv4/IPv6 (Happy Eyeballs -
+  #   navigateur, app mobile standard). Chaque nom doit déjà avoir ses deux
+  #   enregistrements A et AAAA créés manuellement dans l'UI dynv6.
+  # - DYNV6_HOSTNAMES_V6ONLY : AAAA seul, aucun enregistrement A du tout,
+  #   jamais créé ni touché par ce sidecar (même piège que DuckDNS Phase 13)
+  #   — pour minecraft (client Minecraft Java, sans cette bascule).
+  sidecar-ddns-dynv6:
     image: alpine:3.20
-    profiles: ["duckdns"]
+    profiles: ["dynv6"]
     restart: unless-stopped
     network_mode: host
     environment:
-      DUCKDNS_SUBDOMAINS: "${DUCKDNS_SUBDOMAINS}"
-      DUCKDNS_SUBDOMAINS_V6ONLY: "${DUCKDNS_SUBDOMAINS_V6ONLY:-}"
-      DUCKDNS_TOKEN: "${DUCKDNS_TOKEN}"
+      DYNV6_HOSTNAMES: "${DYNV6_HOSTNAMES:-}"
+      DYNV6_HOSTNAMES_V6ONLY: "${DYNV6_HOSTNAMES_V6ONLY:-}"
+      DYNV6_TOKEN: "${DYNV6_TOKEN}"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        apk add --no-cache curl >/dev/null
-        if [ -z "$${DUCKDNS_SUBDOMAINS}" ] && [ -z "$${DUCKDNS_SUBDOMAINS_V6ONLY}" ]; then
-          echo "DUCKDNS_SUBDOMAINS et DUCKDNS_SUBDOMAINS_V6ONLY sont vides, rien à mettre à jour." >&2
+        apk add --no-cache curl jq >/dev/null
+        if [ -z "$${DYNV6_HOSTNAMES}" ] && [ -z "$${DYNV6_HOSTNAMES_V6ONLY}" ]; then
+          echo "DYNV6_HOSTNAMES et DYNV6_HOSTNAMES_V6ONLY sont vides, rien à mettre à jour." >&2
           exit 1
         fi
-        echo "sidecar-ddns démarré pour: $${DUCKDNS_SUBDOMAINS} (A+AAAA) / $${DUCKDNS_SUBDOMAINS_V6ONLY} (AAAA seul)"
+        API="https://dynv6.com/api/v2"
+        echo "sidecar-ddns-dynv6 démarré pour: $${DYNV6_HOSTNAMES} (A+AAAA) / $${DYNV6_HOSTNAMES_V6ONLY} (AAAA seul)"
+        patch_record() {
+          id="$$1"; data="$$2"; label="$$3"
+          CODE=$$(curl -fsS -m 10 -o /tmp/resp -w '%{http_code}' -X PATCH \
+            -H "Authorization: Bearer $${DYNV6_TOKEN}" -H "Content-Type: application/json" \
+            -d "{\"data\":\"$${data}\"}" "$${API}/zones/$${ZONE_ID}/records/$${id}") || CODE="000"
+          if [ "$$CODE" = "200" ]; then
+            echo "$$(date -u +%FT%TZ) dynv6 mis à jour ($${label}): $${data}"
+          else
+            echo "$$(date -u +%FT%TZ) échec mise à jour dynv6 ($${label}, id $${id}), HTTP $$CODE: $$(cat /tmp/resp 2>/dev/null)" >&2
+          fi
+        }
+        find_id() {
+          echo "$$RECORDS" | jq -r --arg n "$$1" --arg t "$$2" '[.[] | select(.type==$$t and .name==$$n)][0].id // ""'
+        }
         while true; do
           IPV6=$$(curl -6 -fsS -m 10 https://api6.ipify.org || echo "")
           if [ -z "$$IPV6" ]; then
             echo "$$(date -u +%FT%TZ) impossible de déterminer l'IPv6 publique (pas de connectivité IPv6 sortante ?)" >&2
           else
-            if [ -n "$${DUCKDNS_SUBDOMAINS}" ]; then
-              RESPONSE=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS}&token=$${DUCKDNS_TOKEN}&ip=192.0.2.1&ipv6=$${IPV6}" || echo "ERROR")
-              case "$$RESPONSE" in
-                *KO*|ERROR)
-                  echo "$$(date -u +%FT%TZ) échec mise à jour DuckDNS ($${DUCKDNS_SUBDOMAINS}): $$RESPONSE" >&2
-                  ;;
-                *)
-                  echo "$$(date -u +%FT%TZ) DuckDNS AAAA mis à jour ($${DUCKDNS_SUBDOMAINS}): $$IPV6 (réponse: $$RESPONSE)"
-                  ;;
-              esac
-            fi
-            if [ -n "$${DUCKDNS_SUBDOMAINS_V6ONLY}" ]; then
-              # Pas de paramètre "ip" du tout ici (voir commentaire plus haut).
-              RESPONSE_V6=$$(curl -fsS -m 10 "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAINS_V6ONLY}&token=$${DUCKDNS_TOKEN}&ipv6=$${IPV6}" || echo "ERROR")
-              case "$$RESPONSE_V6" in
-                *KO*|ERROR)
-                  echo "$$(date -u +%FT%TZ) échec mise à jour DuckDNS v6-only ($${DUCKDNS_SUBDOMAINS_V6ONLY}): $$RESPONSE_V6" >&2
-                  ;;
-                *)
-                  echo "$$(date -u +%FT%TZ) DuckDNS AAAA mis à jour, v6-only ($${DUCKDNS_SUBDOMAINS_V6ONLY}): $$IPV6 (réponse: $$RESPONSE_V6)"
-                  ;;
-              esac
+            ZONE_ID=$$(curl -fsS -m 10 -H "Authorization: Bearer $${DYNV6_TOKEN}" "$${API}/zones" | jq -r '.[0].id') || ZONE_ID=""
+            if [ -z "$$ZONE_ID" ] || [ "$$ZONE_ID" = "null" ]; then
+              echo "$$(date -u +%FT%TZ) impossible de récupérer la zone dynv6 (réseau/API indisponible ?), on réessaiera au prochain cycle" >&2
+            else
+              RECORDS=$$(curl -fsS -m 10 -H "Authorization: Bearer $${DYNV6_TOKEN}" "$${API}/zones/$${ZONE_ID}/records") || RECORDS=""
+              if [ -z "$$RECORDS" ]; then
+                echo "$$(date -u +%FT%TZ) impossible de récupérer les enregistrements dynv6, on réessaiera au prochain cycle" >&2
+              else
+                OLDIFS="$$IFS"; IFS=','
+                for name in $${DYNV6_HOSTNAMES}; do
+                  [ -z "$$name" ] && continue
+                  AID=$$(find_id "$$name" "A")
+                  QID=$$(find_id "$$name" "AAAA")
+                  if [ -n "$$AID" ]; then patch_record "$$AID" "192.0.2.1" "$$name/A"; else echo "$$(date -u +%FT%TZ) pas de A trouvé pour $$name" >&2; fi
+                  if [ -n "$$QID" ]; then patch_record "$$QID" "$$IPV6" "$$name/AAAA"; else echo "$$(date -u +%FT%TZ) pas de AAAA trouvé pour $$name" >&2; fi
+                done
+                for name in $${DYNV6_HOSTNAMES_V6ONLY}; do
+                  [ -z "$$name" ] && continue
+                  QID=$$(find_id "$$name" "AAAA")
+                  if [ -n "$$QID" ]; then patch_record "$$QID" "$$IPV6" "$$name/AAAA v6-only"; else echo "$$(date -u +%FT%TZ) pas de AAAA trouvé pour $$name (v6-only)" >&2; fi
+                done
+                IFS="$$OLDIFS"
+              fi
             fi
           fi
           sleep 300

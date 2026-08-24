@@ -1,0 +1,46 @@
+version: 1
+metadata:
+  name: oidc-paperless
+entries:
+  # OAuth2/OpenID Provider dédié à paperless (authentik/_plan/plan.md phase
+  # 6), même principe que oidc-vikunja.yaml — distinct du provider forward-
+  # auth (Phase 3).
+  #
+  # ATTENTION particulière à ce service (demande explicite de l'utilisateur,
+  # 2026-08-23) : le compte "Julien" existant côté paperless est
+  # SUPERUSER (admin) — ne jamais basculer sur OIDC-only tant que le compte
+  # authentik "julien" n'a pas été explicitement LIÉ à ce compte existant
+  # via /accounts/3rdparty/ (paperless connecté, login local encore actif),
+  # jamais via une création automatique de compte qui laisserait un nouveau
+  # compte non-admin prendre le pas.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider-oidc-paperless
+    identifiers:
+      name: OIDC Paperless
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      client_id: paperless
+      client_secret: !Env OIDC_PAPERLESS_CLIENT_SECRET
+      # Format documenté officiellement par paperless-ngx pour son intégration
+      # allauth "openid_connect" (provider_id "authentik" ci-dessous, côté
+      # paperless/compose.yaml) — à revérifier au premier test réel comme
+      # pour vikunja (où le chemin réel différait de l'hypothèse initiale).
+      redirect_uris:
+        - matching_mode: strict
+          url: https://paperless.jvince.dynv6.net/accounts/oidc/authentik/login/callback/
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
+
+  - model: authentik_core.application
+    id: app-oidc-paperless
+    identifiers:
+      slug: paperless
+    attrs:
+      name: Paperless
+      slug: paperless
+      provider: !KeyOf provider-oidc-paperless

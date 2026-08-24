@@ -1,0 +1,41 @@
+{
+  "_comment": "Règles calibrées sur les payees RÉELS du foyer (import bancaire réel, initialement testé sur le budget de test My-Finances puis rejoué avec succès sur le budget de production le 2026-08-13 — mêmes payees, même foyer). Voir README.md pour la procédure de reconstruction si les payees réels changent (nouvelle banque, nouveaux commerçants habituels).",
+  "account": "compte cheque",
+  "catchAllCategory": "À VÉRIFIER > À vérifier",
+  "rules": [
+    { "category": "ALIMENTATION > Courses", "keywords": ["SUPER U", "INTERMARCHE", "CARREFOUR", "LECLERC", "AUCHAN", "PICARD", "U EXPRESS", "ALIM AGARZUR", "PATIS PFISTER"] },
+    { "category": "ALIMENTATION > Restaurants", "keywords": ["BURGER KING", "MC DONALDS", "MC DO", "CAFE", "BISTRO", "RESTO KNOP", "BREIZH THAI", "DOLCE ITALIA", "TY SPOON", "LA CUCINA", "DISTRI CAFE", "FAST FOOD"] },
+
+    { "category": "LOISIRS > Abonnements", "keywords": ["NETFLIX", "AMAZON PRIME"] },
+    { "category": "LOISIRS > Culture", "keywords": ["CULTURA", "CINEVILLE"] },
+    { "category": "LOISIRS > Sorties", "keywords": ["PISCINE", "CLIP'N CLIMB"] },
+    { "category": "LOISIRS > Jeux / informatique", "keywords": ["BOULANGER"] },
+
+    { "category": "VIE COURANTE > Maison", "keywords": ["STOKOMANI", "GIFI"] },
+    { "category": "VIE COURANTE > Hygiène", "keywords": ["YVES ROCHER"] },
+    { "category": "VIE COURANTE > Achats divers", "keywords": ["AMAZON"], "exclude": ["PRIME"] },
+
+    { "category": "FAMILLE > Santé", "keywords": ["PHARMACIE", "DR BERNARD MARIN", "POLYCLINIQUE", "HOPITAL SEVIGNE", "CHP ST GREGOIRE", "BIOMEDILAM", "Doctolib", "AON-GESTION CHARTRES SANTE", "CPAM ILLE ET VILAINE"] },
+    { "category": "FAMILLE > Vêtements", "keywords": ["ORCHESTRA", "DEVRED", "ARGOS", "LA HALLE", "BESSON"] },
+    { "category": "FAMILLE > Enfant", "keywords": ["JOUET ONLINE", "JOUECLUB", "Lunii"] },
+    { "category": "FAMILLE > Activités", "keywords": ["DECATHLON", "I-RUN"] },
+
+    { "category": "TRANSPORT > Carburant", "keywords": ["SHELL", "APRR", "COFIROUTE", "HORODATEURS", "PARKG CITEDIA"] },
+    { "category": "TRANSPORT > Entretien véhicule", "keywords": ["GARAGE ARRIVEE"] },
+    { "category": "TRANSPORT > Transports en commun", "keywords": ["KEOLIS", "STAR£CUMUL"] },
+
+    { "category": "LOGEMENT > Électricité", "keywords": ["EDF"] },
+    { "category": "LOGEMENT > Chauffage", "keywords": ["ENGIE"] },
+    { "category": "LOGEMENT > Internet / téléphone", "keywords": ["SFR", "FREE MOBILE"] },
+
+    { "category": "IMPÔTS / ADMINISTRATIF > Frais bancaires", "keywords": ["COTISATION EUROCOMPTE"] },
+    { "category": "IMPÔTS / ADMINISTRATIF > Taxes", "keywords": ["CARTE GRISE"] },
+
+    { "category": "OBJECTIFS / ÉPARGNE > Épargne de précaution", "keywords": ["LIVRET CMB", "SURAVENIR"] },
+    { "category": "OBJECTIFS / ÉPARGNE > Vacances", "keywords": ["AIRBNB", "KINTZHEIM", "FREIBURG", "VOLERIE DES AIGL", "SCHNACKAWERT", "CROISIERES INTER", "AUTO BECANE", "NOVA CONCIERGERI", "ST JEAN DE MON", "SUPER U 85 ST GILLES", "VILLE DE ST GILL"] },
+
+    { "category": "Income > Salaires", "keywords": ["SCALITY"] },
+
+    { "category": "TRANSFERTS > Transfert Virginie", "keywords": ["VIRGINIE"] }
+  ]
+}

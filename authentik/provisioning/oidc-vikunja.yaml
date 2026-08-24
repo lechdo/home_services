@@ -1,0 +1,45 @@
+version: 1
+metadata:
+  name: oidc-vikunja
+entries:
+  # OAuth2/OpenID Provider dédié à vikunja (authentik/_plan/plan.md phase 6)
+  # — distinct du provider "forward auth (domain level)" de la phase 3, qui
+  # ne fait que contrôler l'accès réseau : celui-ci permet à vikunja de
+  # déléguer sa PROPRE authentification applicative à authentik (SSO réel
+  # dans l'appli, pas seulement devant).
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider-oidc-vikunja
+    identifiers:
+      name: OIDC Vikunja
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      client_id: vikunja
+      # Jamais en clair ici — valeur réelle dans authentik/.env
+      # (OIDC_VIKUNJA_CLIENT_SECRET), la même à reporter dans
+      # vikunja/.env (VIKUNJA_AUTH_OPENID_PROVIDERS_0_CLIENTSECRET).
+      client_secret: !Env OIDC_VIKUNJA_CLIENT_SECRET
+      # Doit correspondre EXACTEMENT à VIKUNJA_AUTH_OPENID_REDIRECTURL + un
+      # suffixe — constaté réellement en testant (2026-08-23) : vikunja
+      # utilise l'INDEX du provider dans sa liste ("0", cf.
+      # VIKUNJA_AUTH_OPENID_PROVIDERS_0_*), PAS son nom ("authentik") comme
+      # attendu initialement — erreur "redirect_uri" côté authentik avant
+      # cette correction.
+      redirect_uris:
+        - matching_mode: strict
+          url: https://task.jvince.dynv6.net/auth/openid/0
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
+
+  - model: authentik_core.application
+    id: app-oidc-vikunja
+    identifiers:
+      slug: vikunja
+    attrs:
+      name: Vikunja
+      slug: vikunja
+      provider: !KeyOf provider-oidc-vikunja

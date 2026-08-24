@@ -21,6 +21,17 @@ ARCHIVE_FILE = os.path.join(MUSIC_DIR, ".yt-dlp-archive.txt")
 DATA_DIR = "/app/data"
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
+# SSO via authentik (authentik/_plan/plan.md phase 6) : fetcher n'a pas de
+# support OIDC natif (application maison) — on fait confiance à l'en-tête
+# transmis par edge (X-authentik-username,
+# edge/nginx/snippets/authentik-headers.conf) pour auto-connecter une
+# session, sous les mêmes deux conditions que minecraft/panel/app.py (voir
+# ses commentaires pour le détail) : requête venant bien d'edge
+# (TRUSTED_PROXY_IP), et nom d'utilisateur correspondant à un compte déjà
+# existant dans users.json — pas de création automatique.
+TRUSTED_PROXY_IP = os.environ.get("TRUSTED_PROXY_IP", "192.168.1.99")
+TRUSTED_AUTH_HEADER = "X-Authentik-Username"
+
 # Nombre de lots (soumissions) gardés en mémoire pour l'affichage — pas de
 # persistance entre redémarrages du conteneur, voir _plan/plan.md phase 3
 # (un redémarrage pendant un téléchargement en cours est un cas rare et sans
@@ -44,6 +55,17 @@ app.config.update(
 # (/login, /status...) au lieu de /fetcher/login, /fetcher/status, cassant
 # les redirections et les appels JS. Voir _plan/plan.md phase 3.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# request.remote_addr est réécrit par ProxyFix (x_for=1) avec la valeur de
+# X-Forwarded-For — donc plus l'IP d'edge une fois ici, contrairement à
+# minecraft/panel/app.py qui n'a pas ce middleware. Werkzeug conserve
+# heureusement la valeur d'origine, nichée dans le dict "werkzeug.proxy_fix.orig"
+# (PAS les anciennes clés à plat "orig_remote_addr" etc., supprimées dans la
+# version installée ici — constaté réellement : la clé à plat renvoyait
+# toujours None, faisant échouer silencieusement la vérification de
+# confiance sans erreur visible).
+def _orig_remote_addr():
+    return request.environ.get("werkzeug.proxy_fix.orig", {}).get("REMOTE_ADDR")
 
 
 # --- Comptes utilisateurs (créés à la main via manage.py, pas d'auto-inscription) ---
@@ -71,6 +93,19 @@ def login_required(view):
         return view(*args, **kwargs)
 
     return wrapped
+
+
+@app.before_request
+def try_trusted_header_login():
+    if session.get("user"):
+        return
+    if _orig_remote_addr() != TRUSTED_PROXY_IP:
+        return
+    username = request.headers.get(TRUSTED_AUTH_HEADER)
+    if not username:
+        return
+    if username in load_users():
+        session["user"] = username
 
 
 # --- File de téléchargement (un seul worker, séquentiel) ---

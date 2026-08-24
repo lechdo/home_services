@@ -1,0 +1,6 @@
+node_modules/
+.cache/
+# Nom réel constaté en plus de ".cache/" (variante propre à une machine,
+# ex. exécution depuis le Pi) — contient un cache SQLite du vrai budget,
+# données financières réelles, jamais committé.
+.cache-*/

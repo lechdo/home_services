@@ -9,10 +9,10 @@ services:
       # minecraft (_plan/plan.md phase 0). Voir edge/_plan/architecture.md.
       - "192.168.1.109:8087:4533"
     environment:
-      # Servi sous https://music-jvince.duckdns.org/navidrome (voir
-      # _plan/plan.md phase 4) — Navidrome gère nativement ce sous-chemin,
-      # contrairement à "fetcher" (voir ProxyFix côté fetcher).
-      ND_BASEURL: "/navidrome"
+      # Servi à la racine de navi.jvince.dynv6.net depuis la migration dynv6
+      # (edge/_plan/plan.md phase 15) — plus de ND_BASEURL (l'ancien
+      # /navidrome ne veut plus rien dire sur ce nouveau sous-domaine, cf.
+      # bug réel constaté et documenté dans edge/nginx/conf.d/music.conf).
       # Filet de sécurité seulement : testé réellement (_plan/plan.md phase 2)
       # que Navidrome détecte un fichier déposé par "fetcher" quasi
       # instantanément via son watcher de système de fichiers intégré (log
@@ -20,6 +20,28 @@ services:
       # sans attendre cette échéance périodique.
       ND_SCANSCHEDULE: "@every 1m"
       ND_LOGLEVEL: "info"
+      # SSO côté interface web via authentik (authentik/_plan/plan.md phase
+      # 6), en s'appuyant sur le portail générique déjà en place pour les
+      # autres services (pas un OIDC dédié : navidrome n'en a pas besoin,
+      # son mécanisme "Externalized Authentication" fait confiance à un
+      # en-tête HTTP injecté par un reverse-proxy de confiance). L'API
+      # Subsonic (app mobile Symfonium) reste volontairement exemptée de ce
+      # portail côté edge (nginx/conf.d/music.conf, location /rest/) — sans
+      # ça son BasicAuth par requête serait cassé.
+      #
+      # ATTENTION sécurité : ND_EXTAUTH_TRUSTEDSOURCES doit rester restreint
+      # à l'IP LAN d'edge exactement (jamais 0.0.0.0/0) — n'importe quel
+      # client capable d'atteindre navidrome directement avec cet en-tête
+      # pourrait sinon se faire passer pour n'importe quel utilisateur.
+      ND_EXTAUTH_TRUSTEDSOURCES: "192.168.1.99/32"
+      ND_EXTAUTH_USERHEADER: "Remote-User"
+      ND_EXTAUTH_LOGOUTURL: "https://auth.jvince.dynv6.net/if/session-end/"
+      # Ouvert à tous les comptes authentik existants (décision explicite de
+      # l'utilisateur, 2026-08-24, contrairement à actual-budget) : un
+      # compte navidrome est créé automatiquement au premier accès pour
+      # quiconque a une session authentik valide (comportement natif de
+      # navidrome, aucun moyen documenté de le désactiver) — pas de policy
+      # binding restrictif côté authentik pour ce service.
     volumes:
       - navidrome_data:/data
       # Lecture seule côté navidrome : seul "fetcher" écrit dans /music
@@ -35,6 +57,11 @@ services:
       # une fois edge branché) — mettre à false uniquement pour tester en
       # HTTP direct avant l'intégration edge, voir fetcher/app.py.
       COOKIE_SECURE: "${FETCHER_COOKIE_SECURE:-true}"
+      # SSO via authentik (authentik/_plan/plan.md phase 6) : IP LAN d'edge,
+      # seule source de confiance pour l'en-tête X-Authentik-Username (voir
+      # try_trusted_header_login() dans fetcher/app.py) — défaut déjà
+      # correct (edge tourne sur le Pi), explicite ici pour la lisibilité.
+      TRUSTED_PROXY_IP: "${TRUSTED_PROXY_IP:-192.168.1.99}"
     volumes:
       # Lecture-écriture : seul composant qui écrit dans la bibliothèque
       # partagée (musique téléchargée + fichier d'archive yt-dlp).

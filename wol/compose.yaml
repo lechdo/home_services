@@ -1,0 +1,23 @@
+services:
+  # wol : unique conteneur, image officielle python:3.12-alpine + un seul
+  # script stdlib monté en volume (pas d'image custom à builder/publier pour
+  # un service aussi minimal). network_mode: host obligatoire (voir
+  # CLAUDE.md) : un broadcast UDP ne sort jamais d'un réseau bridge Docker
+  # par défaut, seulement network_mode: host donne accès au vrai réseau
+  # local de l'hôte. Pas de "ports:" avec ce mode : le script se lie
+  # directement à 127.0.0.1:8085 sur l'hôte (même pattern que
+  # edge/reverse-proxy).
+  wol:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      WOL_TARGET_MAC: "${WOL_TARGET_MAC}"
+      WOL_BROADCAST_ADDR: "${WOL_BROADCAST_ADDR:-255.255.255.255}"
+      WOL_AUTH_TOKEN: "${WOL_AUTH_TOKEN}"
+      WOL_LISTEN_PORT: "8085"
+      WOL_BIND_ADDR: "127.0.0.1"
+    volumes:
+      - ./app/app.py:/app/app.py:ro
+    working_dir: /app
+    command: ["python3", "app.py"]

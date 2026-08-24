@@ -34,6 +34,8 @@ NETWORK_NAME = "minecraft_net"
 RCON_PORT = 25575
 DIFFICULTIES = ["peaceful", "easy", "normal", "hard"]
 MAP_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
+# Pseudo Minecraft (Java) : 3 à 16 caractères, lettres/chiffres/underscore.
+MC_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 
 # Minuteur de session : le serveur s'arrête tout seul 2h après un démarrage,
 # avec des messages in-game (RCON) aux trois seuils ci-dessous avant l'arrêt
@@ -75,11 +77,36 @@ PLUGINS = {
         "modrinth_slug": "essentialsx",
         "cache_filename": "panel-essentialsx.jar",
     },
+    "sleeper": {
+        "label": "Sleeper (% de joueurs endormis pour passer la nuit, vote, messages)",
+        "modrinth_slug": "sleeper",
+        "cache_filename": "panel-sleeper.jar",
+    },
 }
 
 HOST_PROJECT_DIR = os.environ["HOST_PROJECT_DIR"]
 MC_MEMORY = os.environ.get("MC_MEMORY", "6G")
 MC_LAN_IP = os.environ.get("MC_LAN_IP", "192.168.1.109")
+
+# SSO via authentik (authentik/_plan/plan.md phase 6) : ce panel n'a pas de
+# support OIDC natif (application maison), donc pas d'intégration comme
+# vikunja/paperless/actual-budget — on fait confiance à l'en-tête transmis
+# par edge (X-authentik-username, edge/nginx/snippets/authentik-headers.conf)
+# pour auto-connecter une session, à condition que :
+#   1. la requête vienne bien d'edge (TRUSTED_PROXY_IP) — sans cette
+#      vérification, n'importe quel appareil du LAN capable d'atteindre ce
+#      port directement pourrait usurper n'importe quel utilisateur en
+#      forgeant l'en-tête lui-même (même risque que ND_EXTAUTH_TRUSTEDSOURCES
+#      côté navidrome) ;
+#   2. le nom d'utilisateur authentik corresponde à un compte DÉJÀ EXISTANT
+#      dans users.json — pas de création automatique façon navidrome, un
+#      panel qui contrôle un serveur de jeu n'a pas vocation à s'ouvrir à
+#      n'importe quel compte authentik d'un coup (ex. un compte créé plus
+#      tard pour un autre service). Un utilisateur du panel sans compte
+#      authentik (cas réel : "jean_aurelien") garde son login local
+#      classique — rien ne change pour lui.
+TRUSTED_PROXY_IP = os.environ.get("TRUSTED_PROXY_IP", "192.168.1.99")
+TRUSTED_AUTH_HEADER = "X-Authentik-Username"
 
 app = Flask(__name__)
 app.secret_key = os.environ["SECRET_KEY"]
@@ -93,6 +120,19 @@ app.config.update(
     # message d'erreur). Constaté à l'usage (2026-08-17).
     SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "true").lower() != "false",
 )
+
+
+@app.before_request
+def try_trusted_header_login():
+    if session.get("user"):
+        return
+    if request.remote_addr != TRUSTED_PROXY_IP:
+        return
+    username = request.headers.get(TRUSTED_AUTH_HEADER)
+    if not username:
+        return
+    if username in load_users():
+        session["user"] = username
 
 _docker_client = None
 
@@ -223,6 +263,47 @@ def set_map_difficulty(map_name, difficulty):
 
 def create_map(name):
     os.makedirs(os.path.join(MAPS_DIR, name))
+
+
+# --- Whitelist (contrôle d'accès au serveur de jeu, pas au panel) ---
+
+# Liste canonique commune à toutes les maps (ce n'est pas un réglage par
+# map comme la difficulté : c'est "qui a le droit de rejoindre CE service"),
+# gérée depuis le panel plutôt qu'à la main dans un fichier (décision du
+# 2026-08-18). Combinée à ONLINE_MODE=true (déjà la valeur par défaut de
+# l'image, fixée explicitement ici) : Minecraft vérifie auprès des serveurs
+# Mojang/Microsoft que le client possède réellement le compte correspondant
+# au pseudo annoncé avant même de regarder la whitelist — ça empêche qu'un
+# pseudo déjà utilisé par quelqu'un d'autre serve à se faire passer pour lui
+# (contrairement à un filtrage par pseudo/IP déclarés, qui ne vérifie rien).
+def whitelist():
+    return load_state().get("whitelist", [])
+
+
+def add_to_whitelist(name):
+    state = load_state()
+    entries = state.setdefault("whitelist", [])
+    if name not in entries:
+        entries.append(name)
+        save_state(state)
+    if server_status()["state"] == "running":
+        try:
+            rcon_command(f"whitelist add {name}")
+        except Exception:
+            pass  # appliqué au prochain démarrage via WHITELIST/ENFORCE_WHITELIST
+
+
+def remove_from_whitelist(name):
+    state = load_state()
+    entries = state.get("whitelist", [])
+    if name in entries:
+        entries.remove(name)
+        save_state(state)
+    if server_status()["state"] == "running":
+        try:
+            rcon_command(f"whitelist remove {name}")
+        except Exception:
+            pass
 
 
 # --- Illustration (gif) affichée pendant que le serveur tourne ---
@@ -560,16 +641,18 @@ def ensure_image():
 
 def start_server(map_name):
     difficulty = map_difficulty(map_name)
+    whitelist_value = ",".join(whitelist())
     host_map_dir = f"{HOST_PROJECT_DIR}/maps/{map_name}"
     container = get_container()
 
-    # Recrée le conteneur si la map OU la difficulté configurée ne
-    # correspond plus à ce qui est demandé (les plugins, eux, n'ont pas
+    # Recrée le conteneur si la map, la difficulté OU la whitelist configurée
+    # ne correspond plus à ce qui est demandé (les plugins, eux, n'ont pas
     # besoin de ce contrôle : leur présence sur disque dans maps/<nom>/plugins
     # est lue par Paper à chaque démarrage, un redémarrage normal suffit).
     if container is not None and (
         container_map(container) != map_name
         or container_env(container, "DIFFICULTY") != difficulty
+        or container_env(container, "WHITELIST") != whitelist_value
     ):
         container.remove(force=True)
         container = None
@@ -588,6 +671,13 @@ def start_server(map_name):
                 "ENABLE_RCON": "true",
                 "RCON_PASSWORD": rcon_password(),
                 "RCON_PORT": str(RCON_PORT),
+                # Authentification réelle (vérifiée auprès de Mojang/Microsoft,
+                # empêche qu'un pseudo déjà pris par quelqu'un d'autre serve à
+                # se faire passer pour lui) + accès restreint aux ~10 comptes
+                # déclarés depuis le panel — voir la section whitelist ci-dessus.
+                "ONLINE_MODE": "true",
+                "ENFORCE_WHITELIST": "true",
+                "WHITELIST": whitelist_value,
             },
             volumes={host_map_dir: {"bind": "/data", "mode": "rw"}},
             ports={f"{GAME_PORT}/tcp": (MC_LAN_IP, GAME_PORT)},
@@ -666,6 +756,7 @@ def dashboard_context():
             {key: is_plugin_enabled(current_map, key) for key in PLUGINS}
             if current_map else {}
         ),
+        "whitelist": whitelist(),
         # Les formulaires (map/difficulté/plugins) ne sont modifiables que
         # serveur arrêté — utilisé côté template ET côté /status (pour que
         # le JS puisse resynchroniser les champs sans recharger la page).
@@ -764,6 +855,30 @@ def toggle_plugin():
 
     verb = "activé" if enabled else "désactivé"
     flash(f"{PLUGINS[key]['label']} {verb} pour « {map_name} ».")
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/add-whitelist", methods=["POST"])
+@login_required
+def add_whitelist_route():
+    name = request.form.get("username", "").strip()
+    if not MC_USERNAME_RE.match(name):
+        flash("Pseudo invalide (3 à 16 caractères, lettres/chiffres/underscore).")
+    elif name in whitelist():
+        flash(f"« {name} » est déjà autorisé.")
+    else:
+        add_to_whitelist(name)
+        flash(f"« {name} » ajouté à la whitelist.")
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/remove-whitelist", methods=["POST"])
+@login_required
+def remove_whitelist_route():
+    name = request.form.get("username", "")
+    if name in whitelist():
+        remove_from_whitelist(name)
+        flash(f"« {name} » retiré de la whitelist.")
     return redirect(url_for("dashboard"))
 
 

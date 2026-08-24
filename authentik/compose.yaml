@@ -1,0 +1,110 @@
+services:
+  # Base de données structurelle d'authentik (comptes, providers, applications,
+  # policies...) — propre à ce service, jamais partagée avec un autre.
+  postgresql:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: authentik
+      POSTGRES_DB: authentik
+      POSTGRES_PASSWORD: "${AUTHENTIK_PG_PASSWORD}"
+    volumes:
+      - postgresql:/var/lib/postgresql/data
+
+  # Cache/broker de tâches asynchrones d'authentik (sessions, files
+  # d'attente worker) — propre à ce service également.
+  redis:
+    image: docker.io/library/redis:alpine
+    restart: unless-stopped
+    volumes:
+      - redis:/data
+
+  # server : interface web (login, admin) + API + outpost embarqué (pas de
+  # conteneur outpost séparé, cf. _plan/plan.md phase 3) — c'est ce composant
+  # qu'edge appelle, à la fois pour la page de login (sous-domaine "auth",
+  # public) et pour les sous-requêtes auth_request (interne au LAN).
+  server:
+    # Version à vérifier/mettre à jour avant le premier déploiement réel
+    # (https://github.com/goauthentik/authentik/releases) — jamais "latest"
+    # en production (recommandation officielle authentik), pour ne pas subir
+    # une mise à jour majeure non voulue au prochain `docker compose pull`.
+    image: ghcr.io/goauthentik/server:2024.10.5
+    restart: unless-stopped
+    command: server
+    depends_on:
+      - postgresql
+      - redis
+    environment:
+      AUTHENTIK_SECRET_KEY: "${AUTHENTIK_SECRET_KEY}"
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: "${AUTHENTIK_PG_PASSWORD}"
+      # Secrets de clients OIDC référencés par les blueprints via !Env (jamais
+      # écrits en clair dans un fichier versionné) — authentik/_plan/plan.md
+      # phase 6. Un par application intégrée en SSO applicatif (pas le
+      # forward-auth générique de la phase 3, qui n'en a pas besoin).
+      OIDC_VIKUNJA_CLIENT_SECRET: "${OIDC_VIKUNJA_CLIENT_SECRET}"
+      OIDC_PAPERLESS_CLIENT_SECRET: "${OIDC_PAPERLESS_CLIENT_SECRET}"
+      OIDC_ACTUAL_CLIENT_SECRET: "${OIDC_ACTUAL_CLIENT_SECRET}"
+    volumes:
+      - media:/media
+      - templates:/templates
+      # Provisioning déclaratif (providers/applications/policies), cf.
+      # CLAUDE.md et règle racine sur provisioning/ — jamais créé à la main
+      # dans l'UI sans être aussi capturé ici. Découvert et appliqué
+      # automatiquement par authentik (tâche périodique côté worker).
+      - ./provisioning:/blueprints/custom:ro
+    ports:
+      # Bind sur l'IP LAN du second serveur physique (pas 127.0.0.1) : edge
+      # tourne sur une machine distincte (le Raspberry Pi) et doit joindre ce
+      # port via le réseau local — même pattern que paperless/actual-budget/
+      # minecraft/music_manager. Voir edge/_plan/architecture.md. Port HTTP
+      # natif d'authentik (9000) ; jamais son port HTTPS (9443, inutile ici,
+      # edge termine déjà le TLS).
+      - "192.168.1.109:8089:9000"
+
+  # worker : tâches de fond d'authentik (envoi d'e-mails, nettoyage,
+  # synchronisation programmée...) — même image, commande différente,
+  # n'a besoin d'aucun port publié (jamais appelé directement par edge).
+  worker:
+    image: ghcr.io/goauthentik/server:2024.10.5
+    restart: unless-stopped
+    command: worker
+    depends_on:
+      - postgresql
+      - redis
+    environment:
+      AUTHENTIK_SECRET_KEY: "${AUTHENTIK_SECRET_KEY}"
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: "${AUTHENTIK_PG_PASSWORD}"
+      # Secrets de clients OIDC référencés par les blueprints via !Env (jamais
+      # écrits en clair dans un fichier versionné) — authentik/_plan/plan.md
+      # phase 6. Un par application intégrée en SSO applicatif (pas le
+      # forward-auth générique de la phase 3, qui n'en a pas besoin).
+      OIDC_VIKUNJA_CLIENT_SECRET: "${OIDC_VIKUNJA_CLIENT_SECRET}"
+      OIDC_PAPERLESS_CLIENT_SECRET: "${OIDC_PAPERLESS_CLIENT_SECRET}"
+      OIDC_ACTUAL_CLIENT_SECRET: "${OIDC_ACTUAL_CLIENT_SECRET}"
+    volumes:
+      - media:/media
+      - templates:/templates
+      - certs:/certs
+      - ./provisioning:/blueprints/custom:ro
+
+volumes:
+  postgresql:
+  redis:
+  media:
+  templates:
+  certs:
+
+# Nom fixe (plutôt que celui dérivé du dossier) : cohérence avec les autres
+# services multi-conteneurs de ce dépôt (minecraft_net) — sans incidence
+# fonctionnelle ici, juste une convention.
+networks:
+  default:
+    name: authentik_net

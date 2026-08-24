@@ -14,8 +14,40 @@ services:
       # plus jamais 127.0.0.1 — à faire confiance comme proxy pour les
       # en-têtes X-Forwarded-*.
       ACTUAL_TRUSTED_PROXIES: "192.168.1.99"
+      # SSO applicatif via authentik (authentik/_plan/plan.md phase 6).
+      # Actual supporte l'OIDC nativement (scripts enable-openid.js/
+      # disable-openid.js dans l'image officielle) — activation en deux
+      # temps : ces variables seules ne suffisent pas, il faut aussi lancer
+      # `enable-openid.js` une fois pour que le mode de login bascule
+      # réellement en base (voir scripts/enable-openid.sh).
+      ACTUAL_OPENID_DISCOVERY_URL: "https://auth.jvince.dynv6.net/application/o/actual/.well-known/openid-configuration"
+      ACTUAL_OPENID_CLIENT_ID: "actual"
+      ACTUAL_OPENID_CLIENT_SECRET: "${ACTUAL_OPENID_CLIENT_SECRET}"
+      ACTUAL_OPENID_SERVER_HOSTNAME: "https://budget.jvince.dynv6.net"
+      # Désactive le login par mot de passe une fois l'OIDC actif (demande
+      # explicite de l'utilisateur, 2026-08-24 : authentik seul, pas de
+      # double prompt) — contrairement à vikunja/paperless, pas de compte à
+      # lier au préalable ici (Actual n'a qu'un seul mot de passe global,
+      # pas de comptes multiples), donc rien à préserver en basculant direct.
+      ACTUAL_OPENID_ENFORCE: "true"
+      # ACTUAL_USER_CREATION_MODE volontairement PAS défini (reste à son
+      # défaut "manual", cf. code source d'Actual) : seul le premier compte à
+      # se connecter en OpenID devient propriétaire du serveur, aucun autre
+      # compte authentik (ex. "virginie") ne se voit créer un accès
+      # automatiquement — combiné au policy binding côté authentik
+      # (authentik/provisioning/oidc-actual.yaml, restreint à "julien"), deux
+      # couches indépendantes pour la même exigence.
     volumes:
       - data:/data
+    extra_hosts:
+      # Même bug que vikunja/paperless (authentik/_plan/plan.md phase 6,
+      # troisième occurrence, 2026-08-24) : réseau bridge Docker sans IPv6
+      # sortant, résolution publique de auth.jvince.dynv6.net inutilisable
+      # (A factice + AAAA injoignable) — résolu directement vers edge (le
+      # Pi). Jamais "host-gateway" (piège déjà rencontré : résout vers la
+      # passerelle du réseau bridge Docker PAR DÉFAUT, pas celle du réseau
+      # personnalisé réellement utilisé par ce conteneur).
+      - "auth.jvince.dynv6.net:192.168.1.99"
     ports:
       # Publié sur l'IP LAN du second serveur (pas 127.0.0.1, pas 0.0.0.0) :
       # la requête d'edge vient désormais du réseau local, pas de l'hôte

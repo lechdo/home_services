@@ -1,0 +1,49 @@
+version: 1
+metadata:
+  name: forward-auth-domain
+entries:
+  # Provider unique, mode "forward auth (domain level)" (authentik/_plan/plan.md
+  # phase 3) : session partagée (cookie_domain) entre TOUS les sous-domaines
+  # qui incluent le snippet nginx correspondant (edge/nginx/snippets/) —
+  # pas un provider par service protégé, pour permettre une vraie
+  # authentification unique (SSO) plutôt qu'une reconnexion par service.
+  - model: authentik_providers_proxy.proxyprovider
+    id: provider-forward-auth
+    identifiers:
+      name: Forward Auth (jvince.dynv6.net)
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      mode: forward_domain
+      external_host: https://auth.jvince.dynv6.net
+      cookie_domain: jvince.dynv6.net
+
+  - model: authentik_core.application
+    id: app-forward-auth
+    identifiers:
+      slug: services-proteges
+    attrs:
+      name: Services protégés
+      slug: services-proteges
+      provider: !KeyOf provider-forward-auth
+
+  # Rattache le provider à l'outpost embarqué (pas de conteneur outpost
+  # séparé, cf. authentik/CLAUDE.md) — sans ça, aucun endpoint
+  # /outpost.goauthentik.io n'est réellement servi pour ce provider.
+  #
+  # config.authentik_host_browser : indispensable, sinon vide par défaut et
+  # authentik construit ses URLs de redirection internes (flux OAuth2 sous-
+  # jacent au forward-auth) vers l'adresse d'écoute interne du conteneur
+  # (constaté réellement : "http://0.0.0.0:9000/application/o/authorize/...")
+  # au lieu du nom public — bug reproductible, découvert en testant le flux
+  # de bout en bout (2026-08-23).
+  - model: authentik_outposts.outpost
+    id: outpost-embedded
+    identifiers:
+      name: authentik Embedded Outpost
+    attrs:
+      providers:
+        - !KeyOf provider-forward-auth
+      config:
+        authentik_host: https://auth.jvince.dynv6.net
+        authentik_host_browser: https://auth.jvince.dynv6.net

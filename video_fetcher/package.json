@@ -1,0 +1,16 @@
+{
+  "name": "video-fetcher",
+  "version": "1.0.0",
+  "description": "Récupère une vidéo HLS (JWPlayer) depuis une page web, via Chrome piloté ou un ping.gif fourni manuellement.",
+  "main": "fetch.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "puppeteer-core": "^25.8.0"
+  }
+}

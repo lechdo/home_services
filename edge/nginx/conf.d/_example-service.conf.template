@@ -13,7 +13,7 @@
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    server_name SUBDOMAIN.duckdns.org;
+    server_name SUBDOMAIN.jvince.dynv6.net;
 
     ssl_certificate     /etc/nginx/certs/SUBDOMAIN/fullchain.pem;
     ssl_certificate_key /etc/nginx/certs/SUBDOMAIN/privkey.pem;
