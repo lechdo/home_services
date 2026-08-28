@@ -1,0 +1,98 @@
+services:
+  # Base de données de contenu d'outline (documents, collections, comptes) —
+  # propre à ce service, jamais partagée avec un autre (CLAUDE.md racine).
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: outline
+      POSTGRES_DB: outline
+      POSTGRES_PASSWORD: "${OUTLINE_PG_PASSWORD}"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+
+  # Cache/websockets (édition collaborative temps réel) — propre à ce
+  # service également.
+  redis:
+    image: docker.io/library/redis:alpine
+    restart: unless-stopped
+    volumes:
+      - redis:/data
+
+  outline:
+    # Version à vérifier/mettre à jour avant le premier déploiement réel
+    # (https://github.com/outline/outline/releases, dernière stable
+    # constatée le 2026-08-28 : v1.9.2) — jamais "latest" en production,
+    # même règle que les autres services de ce dépôt (cf. authentik/
+    # compose.yaml).
+    image: docker.getoutline.com/outlinewiki/outline:1.9.2
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      NODE_ENV: production
+      URL: "https://doc.jvince.dynv6.net"
+      PORT: "3000"
+      SECRET_KEY: "${OUTLINE_SECRET_KEY}"
+      UTILS_SECRET: "${OUTLINE_UTILS_SECRET}"
+      DATABASE_URL: "postgres://outline:${OUTLINE_PG_PASSWORD}@postgres:5432/outline"
+      # Bug réel constaté au premier déploiement (2026-08-28) : outline
+      # ignore une variable "DATABASE_SSL" (qui n'existe pas côté outline) et
+      # exige en réalité PGSSLMODE, sans quoi il tente du SSL contre un
+      # Postgres qui n'en a pas — postgres:16-alpine n'a pas SSL activé par
+      # défaut (SSL déjà terminé par edge en amont de toute façon, contrat
+      # d'intégration standard, edge/_plan/architecture.md).
+      PGSSLMODE: "disable"
+      REDIS_URL: "redis://redis:6379"
+      # Stockage local plutôt que S3 (question ouverte n°1 du plan résolue
+      # le 2026-08-28) : évite d'ajouter un composant MinIO pour un usage
+      # personnel/familial, cohérent avec la philosophie du dépôt (pas de
+      # composant supplémentaire si évitable). C'est aussi la valeur par
+      # défaut d'outline, réaffirmée ici explicitement.
+      FILE_STORAGE: "local"
+      FILE_STORAGE_UPLOAD_MAX_SIZE: "26214400"
+      # Pas de SMTP configuré (question ouverte n°2 du plan résolue le
+      # 2026-08-28) : accès déjà limité aux deux comptes SSO existants
+      # (julien/virginie), pas d'auto-inscription par e-mail à couvrir. À
+      # revoir si un besoin de notification par e-mail apparaît un jour.
+      SMTP_HOST: ""
+      # SSO applicatif via authentik (authentik/_plan/plan.md phase 6,
+      # authentik/provisioning/oidc-outline.yaml) — hypothèses à vérifier au
+      # premier test réel (comme pour vikunja/paperless, où le chemin réel
+      # différait de l'hypothèse initiale) :
+      # - callback attendu par outline : /auth/oidc.callback
+      # - endpoints authentik génériques (pas scopés par application) :
+      #   authorize/token/userinfo, cf. discovery
+      #   https://auth.jvince.dynv6.net/application/o/outline/.well-known/openid-configuration
+      OIDC_CLIENT_ID: "outline"
+      OIDC_CLIENT_SECRET: "${OIDC_OUTLINE_CLIENT_SECRET}"
+      OIDC_AUTH_URI: "https://auth.jvince.dynv6.net/application/o/authorize/"
+      OIDC_TOKEN_URI: "https://auth.jvince.dynv6.net/application/o/token/"
+      OIDC_USERINFO_URI: "https://auth.jvince.dynv6.net/application/o/userinfo/"
+      OIDC_USERNAME_CLAIM: "preferred_username"
+      OIDC_DISPLAY_NAME: "authentik"
+      OIDC_SCOPES: "openid profile email"
+    volumes:
+      - storage:/var/lib/outline/data
+    ports:
+      # Bind sur l'IP LAN du second serveur physique (pas 127.0.0.1) : edge
+      # tourne sur une machine distincte (le Raspberry Pi) et doit joindre ce
+      # port via le réseau local — même pattern que paperless/actual-budget/
+      # minecraft/music_manager/authentik. Voir edge/_plan/architecture.md.
+      # Port 8090 : premier port libre après authentik (8089) au moment de
+      # l'écriture de ce plan (_plan/plan.md) — à ajuster si un autre
+      # service a pris ce port entre-temps.
+      - "192.168.1.109:8090:3000"
+
+volumes:
+  postgres:
+  redis:
+  storage:
+
+# Nom fixe (plutôt que celui dérivé du dossier) : cohérence avec les autres
+# services multi-conteneurs de ce dépôt (authentik_net, minecraft_net) —
+# sans incidence fonctionnelle ici, juste une convention.
+networks:
+  default:
+    name: outline_net

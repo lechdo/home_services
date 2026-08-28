@@ -1,0 +1,48 @@
+version: 1
+metadata:
+  name: oidc-outline
+entries:
+  # OAuth2/OpenID Provider dédié à outline (outline/_plan/plan.md phase 3),
+  # même principe que oidc-vikunja.yaml/oidc-paperless.yaml.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider-oidc-outline
+    identifiers:
+      name: OIDC Outline
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      client_id: outline
+      # Jamais en clair ici — valeur réelle dans authentik/.env
+      # (OIDC_OUTLINE_CLIENT_SECRET), la même à reporter dans
+      # outline/.env (OIDC_OUTLINE_CLIENT_SECRET côté outline).
+      client_secret: !Env OIDC_OUTLINE_CLIENT_SECRET
+      # Hypothèse non vérifiée (outline/_plan/plan.md phase 3) : outline
+      # construit son callback OIDC sur "/auth/oidc.callback" — à confirmer
+      # en lisant l'erreur exacte côté authentik au premier essai réel,
+      # comme pour vikunja où l'hypothèse initiale ("/auth/openid/authentik")
+      # s'est révélée fausse ("/auth/openid/0", l'index du provider).
+      redirect_uris:
+        - matching_mode: strict
+          url: https://doc.jvince.dynv6.net/auth/oidc.callback
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
+
+  - model: authentik_core.application
+    id: app-oidc-outline
+    identifiers:
+      slug: outline
+    attrs:
+      name: Outline
+      slug: outline
+      provider: !KeyOf provider-oidc-outline
+
+  # Pas de policybinding restrictif ici (à la différence d'oidc-actual.yaml,
+  # restreint à "julien" seul) : julien et virginie sont aujourd'hui les
+  # deux seuls comptes authentik existants, donc une Application sans
+  # binding (déjà ouverte à tous les comptes existants) satisfait déjà
+  # l'exigence "julien et virginie peuvent se connecter" — voir
+  # outline/_plan/plan.md, décision n°4.
