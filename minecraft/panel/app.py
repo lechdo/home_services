@@ -133,6 +133,14 @@ def try_trusted_header_login():
         return
     if username in load_users():
         session["user"] = username
+    else:
+        # Cas silencieux jusqu'ici (retombée sur l'écran de login local sans
+        # aucune trace) — le seul indice pour distinguer un compte authentik
+        # non provisionné localement d'un vrai souci de connectivité edge.
+        app.logger.warning(
+            "SSO : en-tête %s=%r reçu de %s, aucun compte local correspondant",
+            TRUSTED_AUTH_HEADER, username, request.remote_addr,
+        )
 
 _docker_client = None
 

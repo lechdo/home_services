@@ -49,23 +49,19 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "true").lower() != "false",
 )
 
-# Fait comprendre à Flask que ce service est servi sous /fetcher (en-tête
-# X-Forwarded-Prefix envoyé par edge, voir edge/nginx/conf.d/music.conf) —
-# sans ça, url_for() générerait des liens à la racine du sous-domaine
-# (/login, /status...) au lieu de /fetcher/login, /fetcher/status, cassant
-# les redirections et les appels JS. Voir _plan/plan.md phase 3.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-
-# request.remote_addr est réécrit par ProxyFix (x_for=1) avec la valeur de
-# X-Forwarded-For — donc plus l'IP d'edge une fois ici, contrairement à
-# minecraft/panel/app.py qui n'a pas ce middleware. Werkzeug conserve
-# heureusement la valeur d'origine, nichée dans le dict "werkzeug.proxy_fix.orig"
-# (PAS les anciennes clés à plat "orig_remote_addr" etc., supprimées dans la
-# version installée ici — constaté réellement : la clé à plat renvoyait
-# toujours None, faisant échouer silencieusement la vérification de
-# confiance sans erreur visible).
-def _orig_remote_addr():
-    return request.environ.get("werkzeug.proxy_fix.orig", {}).get("REMOTE_ADDR")
+# fetcher est servi à la racine de music.jvince.dynv6.net (edge/_plan/plan.md
+# phase 15, routage par chemin /fetcher/ abandonné) — X-Forwarded-Proto reste
+# nécessaire pour qu'url_for() génère des liens en https:// plutôt qu'en
+# http:// derrière edge. Volontairement PAS x_for=1 (bug réel trouvé le
+# 2026-09-01) : ça réécrit request.remote_addr avec X-Forwarded-For, cassant
+# silencieusement try_trusted_header_login() (TRUSTED_PROXY_IP compare alors
+# à l'IP publique du navigateur, jamais égale à l'IP LAN d'edge) — et la
+# tentative de contournement via l'environ interne "werkzeug.proxy_fix.orig"
+# s'est révélée elle-même fragile (clé dépendant d'une version de Werkzeug
+# non figée dans requirements.txt). Sans x_for, request.remote_addr n'est
+# jamais réécrit et reste directement l'IP du pair TCP (edge), exactement ce
+# dont try_trusted_header_login() a besoin.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 
 # --- Comptes utilisateurs (créés à la main via manage.py, pas d'auto-inscription) ---
@@ -99,13 +95,21 @@ def login_required(view):
 def try_trusted_header_login():
     if session.get("user"):
         return
-    if _orig_remote_addr() != TRUSTED_PROXY_IP:
+    if request.remote_addr != TRUSTED_PROXY_IP:
         return
     username = request.headers.get(TRUSTED_AUTH_HEADER)
     if not username:
         return
     if username in load_users():
         session["user"] = username
+    else:
+        # Cas silencieux jusqu'ici (retombée sur l'écran de login local sans
+        # aucune trace) — le seul indice pour distinguer un compte authentik
+        # non provisionné localement d'un vrai souci de connectivité edge.
+        app.logger.warning(
+            "SSO : en-tête %s=%r reçu de %s, aucun compte local correspondant",
+            TRUSTED_AUTH_HEADER, username, request.remote_addr,
+        )
 
 
 # --- File de téléchargement (un seul worker, séquentiel) ---
